@@ -2235,8 +2235,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                           // 吃醋/好奇反查
                           auditHint = `\n[角色反查发现: 你刚刚在后台偷偷看了一下用户的活动记录，发现 TA 在 ${lastOtherCharDiffMin} 分钟前还在和「${lastOtherCharName}」聊天。而 TA 已经 ${timeSinceUser || '挺久'} 没理你了。你心里肯定很不服气、酸溜溜的、或者想暗戳戳地刺 TA 几句。请在这次主动发去的消息中自然地体现出这一“醋意”或“打听行为”，但要符合你的人设（可以傲娇、可以直球质问、也可以暗示范指）。]`;
                       } else if (hasRecentPost) {
-                          // 朋友圈话题反查
-                          auditHint = `\n[角色反查发现: 你刚刚刷了一下用户的 Spark 主页，看到 TA 在最近发了一篇关于《${latestUserPost.title || '无题'}》的动态，内容是：“${latestUserPost.content || ''}”（贴纸编码: ${latestUserPost.images?.[0] || '无'}）。你觉得这个话题蛮有意思，决定主动以此为契机找 TA 聊天。请在接下来发送的私聊消息里，自然地提起或调侃这篇帖子。]`;
+                          // 论坛帖子话题反查
+                          auditHint = `\n[角色反查发现: 你刚刚在 Spark 论坛上看到了用户最近发布的一篇笔记帖子，标题是《${latestUserPost.title || '无题'}》，内容是：“${latestUserPost.content || ''}”（贴纸编码: ${latestUserPost.images?.[0] || '无'}）。你觉得这个帖子主题蛮有意思，决定主动以此为契机找 TA 聊天。请在接下来发送的私聊消息里，自然地提起或调侃这篇论坛笔记帖子。]`;
                       }
                   } catch (e) {
                       console.warn('[Proactive/Audit] 角色反查执行失败:', e);
