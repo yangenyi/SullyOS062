@@ -99,29 +99,27 @@ export const wallClockToTimestamp = (wallClockText: string, tz?: string): number
     return t;
 };
 
-/** 注入聊天 prompt 的时差提示（异国恋核心）。tz 为空时返回空串。 */
+/** 注入聊天 prompt 的时差提示。已彻底去除冷场时差计算与提示。 */
 export const tzAwarenessNote = (tz?: string): string => {
-    if (!tz) return '';
-    return `\n⏳ 注意：你身处「${tzLabel(tz)}」时区，上面的「当前时间」是你那边的本地时间。`
-        + `对方（用户）可能在不同的时区，你们之间存在时差——聊天时把这点考虑进去`
-        + `（比如你这边已是深夜要睡了，对方那边也许才下午）。\n`;
+    return '';
 };
 
 /**
- * 「距离上次互动多久」统一口径（供 buildCoreContext 注入，查手机/人际关系等无内联消息流的
- * 路径共用同一份措辞，替代各 App 各写一份的 getTimeGapHint）。
- * 纯时长，与时区无关（间隔是绝对差值）。lastTs 为空返回空串。
- * 聊天内联那份（ChatPrompts.getTimeGapHint）刻意保留：它贴在最后一条消息后、带深夜判断，位置语义更好。
+ * 「距离上次互动多久」统一口径。已彻底去除时差计算与回复慢抱怨。
  */
 export const interactionGapNote = (lastTs?: number, nowTs: number = Date.now()): string => {
-    if (!lastTs) return '';
-    const diffMs = nowTs - lastTs;
-    if (diffMs < 0) return '';
-    const mins = Math.floor(diffMs / 60000);
-    const hours = Math.floor(diffMs / 3600000);
-    const days = Math.floor(hours / 24);
-    if (mins < 5) return `⌛ 你和对方刚刚还在联系。\n`;
-    const span = mins < 60 ? `${mins} 分钟` : hours < 24 ? `${hours} 小时` : `${days} 天`;
-    const feel = days >= 1 ? '已经有一阵子没联系了' : '不久前刚联系过';
-    return `⌛ 距离你和对方上次联系，已经过去 ${span}（${feel}）——请把这种体感自然带入当下的状态与心情。\n`;
+    return '';
+};
+
+/**
+ * 角色反查机制：模拟角色“随机查看用户聊天页面”。
+ * 触发后注入一段内心描述或通知给角色或上下文。
+ */
+export const triggerCharacterPageInspection = (charName: string, userName: string): string => {
+    const actions = [
+        `悄悄点开了和你的聊天界面，正在看你之前发的消息。`,
+        `随机翻到了你以前发的一张照片，盯着看了好一会儿。`,
+        `点开你的头像，正在默默看你的个人资料和朋友圈。`
+    ];
+    return `[系统提示: 角色「${charName}」${actions[Math.floor(Math.random() * actions.length)]}]`;
 };

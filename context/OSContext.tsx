@@ -2198,9 +2198,54 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
               const justMetOffline = lastRealMsgRaw?.metadata?.source === 'date'
                   && (now.getTime() - lastRealMsgRaw.timestamp) < DATE_AFTERGLOW_MS;
 
+              // --- 角色反查逻辑 (有 40% 的概率触发对用户私聊记录和论坛动态的反查) ---
+              let auditHint = '';
+              const TRIGGER_AUDIT_PROBABILITY = 0.4;
+              if (Math.random() < TRIGGER_AUDIT_PROBABILITY) {
+                  try {
+                      // 1. 查找用户和其他角色的最近互动
+                      let lastOtherCharName = '';
+                      let lastOtherCharDiffMin = Infinity;
+                      for (const c of currentCharacters) {
+                          if (c.id === charId) continue;
+                          const cRecent = await DB.getRecentMessagesByCharId(c.id, 1, true);
+                          if (cRecent && cRecent.length > 0) {
+                              const diff = Math.floor((now.getTime() - cRecent[0].timestamp) / 60000);
+                              if (diff < lastOtherCharDiffMin) {
+                                  lastOtherCharDiffMin = diff;
+                                  lastOtherCharName = c.name;
+                              }
+                          }
+                      }
+
+                      // 2. 查找用户最近的 Spark 论坛发帖
+                      let latestUserPost = null;
+                      const posts = await DB.getSocialPosts();
+                      const userPosts = posts ? posts.filter((p: any) => p.authorType === 'user' || p.authorName === userName) : [];
+                      if (userPosts.length > 0) {
+                          userPosts.sort((a: any, b: any) => b.timestamp - a.timestamp);
+                          latestUserPost = userPosts[0];
+                      }
+
+                      // 3. 组装反查提示
+                      const isTalkingToOtherRecently = lastOtherCharName && lastOtherCharDiffMin < 60; // 1小时内和别人聊过
+                      const hasRecentPost = latestUserPost && (now.getTime() - latestUserPost.timestamp) < 4 * 60 * 60 * 1000; // 4小时内发过帖子
+
+                      if (isTalkingToOtherRecently && Math.random() < 0.5) {
+                          // 吃醋/好奇反查
+                          auditHint = `\n[角色反查发现: 你刚刚在后台偷偷看了一下用户的活动记录，发现 TA 在 ${lastOtherCharDiffMin} 分钟前还在和「${lastOtherCharName}」聊天。而 TA 已经 ${timeSinceUser || '挺久'} 没理你了。你心里肯定很不服气、酸溜溜的、或者想暗戳戳地刺 TA 几句。请在这次主动发去的消息中自然地体现出这一“醋意”或“打听行为”，但要符合你的人设（可以傲娇、可以直球质问、也可以暗示范指）。]`;
+                      } else if (hasRecentPost) {
+                          // 朋友圈话题反查
+                          auditHint = `\n[角色反查发现: 你刚刚刷了一下用户的 Spark 主页，看到 TA 在最近发了一篇关于《${latestUserPost.title || '无题'}》的动态，内容是：“${latestUserPost.content || ''}”（贴纸编码: ${latestUserPost.images?.[0] || '无'}）。你觉得这个话题蛮有意思，决定主动以此为契机找 TA 聊天。请在接下来发送的私聊消息里，自然地提起或调侃这篇帖子。]`;
+                      }
+                  } catch (e) {
+                      console.warn('[Proactive/Audit] 角色反查执行失败:', e);
+                  }
+              }
+
               const hintContent = justMetOffline
                       ? `[系统提示（非${userName}发言）: 现在是 ${timeStr}。你和${userName}刚刚在线下见过面（如果上下文里有标着 [约会] 的内容，那就是你们见面时发生的事），现在你们暂时分开了，你拿起手机想给${userName}发条消息。请基于刚才的见面来发——可以回味见面里的某个细节、补一句当时没说出口的话、关心${userName}到家了没，或者就是刚分开就有点想念。绝对不要表现得好像很久没联系，更不要对刚才的见面毫不知情。一两句话就好。]`
-                      : `[系统提示（非${userName}发言）: 现在是 ${timeStr}。${timeSinceUser ? `${userName}已经 ${timeSinceUser} 没有找你说话了。` : ''}这是系统给你的一次主动发消息机会——${userName}并没有在跟你说话，是你想主动找${userName}。像真人一样随意地发条消息吧，比如：随手拍了张照片想分享、刚看到个有趣的事想说、突然想到个冷知识、吐槽今天的天气/食物/见闻、或者就是单纯想找${userName}聊几句。不要刻意，不要像在"汇报近况"，就像你真的拿起手机随手发了条消息。一两句话就好。${timeSinceUser && parseInt(timeSinceUser) > 2 ? `（${userName}挺久没找你了，你也可以表达想念、好奇${userName}在干嘛、或者小小地抱怨一下。）` : ''}]`;
+                      : `[系统提示（非${userName}发言）: 现在是 ${timeStr}。${timeSinceUser ? `${userName}已经 ${timeSinceUser} 没有找你说话了。` : ''}这是系统给你的一次主动发消息机会——${userName}并没有在跟你说话，是你想主动找${userName}。像真人一样随意地发条消息吧，比如：随手拍了张照片想分享、刚看到个有趣的事想说、突然想到个冷知识、吐槽今天的天气/食物/见闻、或者就是单纯想找${userName}聊几句。不要刻意，不要像在"汇报近况"，就像你真的拿起手机随手发了条消息。一两句话就好。${timeSinceUser && parseInt(timeSinceUser) > 2 ? `（${userName}挺久没找你了，你也可以表达想念、好奇${userName}在干嘛、或者小小地抱怨一下。）` : ''}]${auditHint}`;
 
               await DB.saveMessage({
                   charId,

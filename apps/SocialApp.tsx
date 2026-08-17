@@ -420,7 +420,12 @@ const SocialApp: React.FC = () => {
         setSelectedPost(current => (current?.id === postId ? null : current));
     };
 
-    // --- AI Logic (Updated for Multi-Handle) ---
+    // --- Helper to get global imageGen settings ---
+    const isImageGenEnabled = () => {
+        return apiConfig.imageGenEnabled === true;
+    };
+
+    // --- AI Logic (Updated for Multi-Handle & Image Interception) ---
     const handleRefresh = async () => {
         if (!apiConfig.apiKey) { addToast('请配置 API Key', 'error'); return; }
         if (refreshRequestRef.current) return;
@@ -429,8 +434,11 @@ const SocialApp: React.FC = () => {
         setIsRefreshing(true);
         trackEvent('刷新 Spark 推荐流');
         try {
-            const shuffledChars = [...characters].sort(() => 0.5 - Math.random());
-            const selectedChars = shuffledChars.slice(0, Math.min(3, characters.length));
+            // 新增：支持禁用特定角色发帖/评论权限
+            const disabledHandleIds = JSON.parse(localStorage.getItem('spark_disabled_handles') || '[]');
+            const activeChars = characters.filter(c => !disabledHandleIds.includes(c.id));
+            const shuffledChars = [...activeChars].sort(() => 0.5 - Math.random());
+            const selectedChars = shuffledChars.slice(0, Math.min(3, activeChars.length));
             
             // Build Character Map with Multiple Handles Info
             let charContexts = "";
@@ -448,9 +456,15 @@ const SocialApp: React.FC = () => {
                 charContexts += `\n<<< 角色档案: ${char.name} >>>\n${coreContext}\n${recentStatus}\n<<< 档案结束 >>>\n`;
             }
 
+            // 新增：全局输入框控制生成内容方向
+            const globalDirection = localStorage.getItem('spark_global_direction') || '';
+            const directionPrompt = globalDirection 
+                ? `\n### 📢 额外生成内容方向控制指令（必须严格遵守此生成风格/方向）:\n${globalDirection}\n`
+                : '';
+
             const prompt = `### 任务: 模拟社交APP "Spark" 的推荐流
 你需要生成 6-8 条新的社交媒体帖子。
-
+${directionPrompt}
 ### 🎭 内容构成 (混合模式)
 1. **角色发帖 (30%)**: 
    - 选中的角色: ${selectedChars.map(c => c.name).join(', ')}
@@ -498,13 +512,13 @@ ${charContexts}
             const json = safeParseJSON(data.choices[0].message.content);
             if (!Array.isArray(json)) throw new Error('Parsed data is not an array');
             
-            const newPosts: SocialPost[] = json
+            const newPosts: SocialPost[] = await Promise.all(json
                 .filter((item: any) => {
                     // Defense in depth: drop any AI-generated post that tries to impersonate the user.
                     const name = (item?.authorName || '').toString().trim();
                     return name && name !== socialProfile.name;
                 })
-                .map((item: any) => {
+                .map(async (item: any) => {
                 let avatar = `https://api.dicebear.com/7.x/notionists/svg?seed=${item.authorName}`;
                 let matchedChar: CharacterProfile | undefined;
                 if (item.isCharacter) {
@@ -523,7 +537,98 @@ ${charContexts}
                 }
                 // Normalize emoji content. AI usually returns real emoji chars; fall back to a ✨ char (not codepoint) for safety.
                 const rawEmojis = Array.isArray(item.emojis) && item.emojis.length > 0 ? item.emojis : ['✨'];
-                const images = rawEmojis.map((e: any) => codepointToEmoji(String(e ?? '✨')));
+                let images = rawEmojis.map((e: any) => codepointToEmoji(String(e ?? '✨')));
+
+                // 引入全局生图拦截，使得论坛推荐流文案能自动触发画图并显示
+                if (isImageGenEnabled() && item.content) {
+                    try {
+                        const imgGenApi = apiConfig as any;
+                        const isSdWebui = imgGenApi.imageGenUrl?.includes('/sdapi/v1');
+                        const isNovelAi = imgGenApi.imageGenUrl?.includes('/generate') || imgGenApi.imageGenUrl?.includes('/novelai');
+                        let fetchUrl = imgGenApi.imageGenUrl || '';
+                        let imgHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+                        let imgBody: any = {};
+
+                        // 采用帖子正文作为画图指令
+                        const finalPrompt = `${item.content.slice(0, 150)}, ${imgGenApi.imageGenPrompt || ''}, ${imgGenApi.imageGenFaceLock || ''}`.trim().replace(/,\s*,/g, ',').replace(/,\s*$/, '');
+                        const finalNegativePrompt = imgGenApi.imageGenNegativePrompt || 'nsfw, low quality, bad anatomy, deformed';
+
+                        if (isSdWebui) {
+                            fetchUrl = fetchUrl.endsWith('/txt2img') ? fetchUrl : `${fetchUrl.replace(/\/+$/, '')}/txt2img`;
+                            if (imgGenApi.imageGenKey) imgHeaders['Authorization'] = `Bearer ${imgGenApi.imageGenKey}`;
+                            imgBody = {
+                              prompt: finalPrompt,
+                              negative_prompt: finalNegativePrompt,
+                              steps: 20,
+                              width: 512,
+                              height: 512,
+                              batch_size: 1,
+                            };
+                        } else if (isNovelAi) {
+                            if (imgGenApi.imageGenKey) imgHeaders['Authorization'] = `Bearer ${imgGenApi.imageGenKey}`;
+                            imgBody = {
+                              input: finalPrompt,
+                              model: 'safe-diffusion',
+                              parameters: {
+                                width: 512,
+                                height: 512,
+                                negative_prompt: finalNegativePrompt,
+                              }
+                            };
+                        } else {
+                            fetchUrl = fetchUrl.endsWith('/images/generations') ? fetchUrl : `${fetchUrl.replace(/\/+$/, '')}/v1/images/generations`;
+                            if (imgGenApi.imageGenKey) imgHeaders['Authorization'] = `Bearer ${imgGenApi.imageGenKey}`;
+                            imgBody = {
+                              prompt: finalPrompt,
+                              n: 1,
+                              size: '512x512',
+                              response_format: 'b64_json',
+                            };
+                        }
+
+                        const res = await fetch(fetchUrl, {
+                            method: 'POST',
+                            headers: imgHeaders,
+                            body: JSON.stringify(imgBody),
+                        });
+
+                        if (res.ok) {
+                            const resData = await res.json();
+                            let base64Data = '';
+                            if (resData.data?.[0]?.b64_json) {
+                                base64Data = resData.data[0].b64_json;
+                            } else if (resData.data?.[0]?.url) {
+                                const imgRes = await fetch(resData.data[0].url);
+                                if (imgRes.ok) {
+                                    const imgBlob = await imgRes.blob();
+                                    const refUrl = await putImageBlob(imgBlob);
+                                    images = [refUrl];
+                                }
+                            } else if (resData.images?.[0]) {
+                                base64Data = resData.images[0];
+                            } else if (resData.image) {
+                                base64Data = resData.image;
+                            }
+
+                            if (base64Data) {
+                                const mimeType = base64Data.startsWith('data:') ? (base64Data.match(/^data:([^;]+)/)?.[1] || 'image/png') : 'image/png';
+                                const pureBase64 = base64Data.startsWith('data:') ? base64Data.split(',')[1] : base64Data;
+                                const binary = atob(pureBase64);
+                                const len = binary.length;
+                                const bytes = new Uint8Array(len);
+                                for (let i = 0; i < len; i++) {
+                                    bytes[i] = binary.charCodeAt(i);
+                                }
+                                const imgBlob = new Blob([bytes], { type: mimeType });
+                                const refUrl = await putImageBlob(imgBlob);
+                                images = [refUrl];
+                            }
+                        }
+                    } catch (err) {
+                        console.error('Forum ImageGen failed:', err);
+                    }
+                }
+
                 return {
                     id: `post-${Date.now()}-${Math.random()}`,
                     authorName: item.authorName || 'Unknown',
@@ -541,7 +646,7 @@ ${charContexts}
                     authorType: isCharacterPost ? 'character' : 'stranger',
                     authorCharId: matchedChar?.id,
                 };
-            });
+            }));
             prependPostsToFeed(newPosts);
             addToast('首页已刷新: 冲浪模式开启', 'success');
         } catch (e: any) {
@@ -565,7 +670,10 @@ ${charContexts}
         post = livePost;
         setLoadingComments(true);
         try {
-            const shuffledChars = [...characters].sort(() => 0.5 - Math.random());
+            // 新增：支持禁用特定角色发帖/评论权限
+            const disabledHandleIds = JSON.parse(localStorage.getItem('spark_disabled_handles') || '[]');
+            const activeChars = characters.filter(c => !disabledHandleIds.includes(c.id));
+            const shuffledChars = [...activeChars].sort(() => 0.5 - Math.random());
             const selectedChars = shuffledChars.slice(0, 2);
             
             let identityMap = "";
@@ -597,6 +705,12 @@ ${charContexts}
                 }
             }
 
+            // 新增：全局输入框控制生成内容方向
+            const globalDirection = localStorage.getItem('spark_global_direction') || '';
+            const directionPrompt = globalDirection 
+                ? `\n### 📢 额外生成内容方向控制指令（必须严格遵守此生成风格/方向）:\n${globalDirection}\n`
+                : '';
+
             const prompt = `### 任务: 模拟社交APP评论区
 **帖子来源**: "Spark" 社区
 **楼主**: "${post.authorName}" (${authorType})
@@ -605,7 +719,7 @@ ${charContexts}
 """
 ${post.content || '(楼主没写正文)'}
 """
-
+${directionPrompt}
 请基于上面的【标题 + 正文】生成 4-6 条评论，评论要切实回应正文里提到的内容，不要只对着标题空泛地说。混合使用 **选定角色** 和 **随机路人**。
 角色评论时，请选择一个符合语境的马甲身份。
 
@@ -686,9 +800,13 @@ ${contextPrompt}
         post = feedRef.current.find(item => item.id === post.id) || post;
         setIsReplyingToUser(true);
         try {
+            // 新增：支持禁用特定角色发帖/评论权限
+            const disabledHandleIds = JSON.parse(localStorage.getItem('spark_disabled_handles') || '[]');
+            const activeChars = characters.filter(c => !disabledHandleIds.includes(c.id));
+
             // Simplified handle map for replies
             let identityMap = "";
-            characters.forEach(char => {
+            activeChars.forEach(char => {
                 const handles = characterHandles[char.id] || [];
                 const hList = handles.map(h => `"${h.handle}"`).join(', ');
                 identityMap += `- ${char.name}: ${hList}\n`;
@@ -705,6 +823,12 @@ ${contextPrompt}
                 postAuthorInfo += ' (用户本人)';
             }
 
+            // 新增：全局输入框控制生成内容方向
+            const globalDirection = localStorage.getItem('spark_global_direction') || '';
+            const directionPrompt = globalDirection 
+                ? `\n### 📢 额外生成内容方向控制指令（必须严格遵守此生成风格/方向）:\n${globalDirection}\n`
+                : '';
+
             const prompt = `### 任务: 回复用户的评论
 **帖子楼主**: ${postAuthorInfo}
 **帖子标题**: "${post.title}"
@@ -713,12 +837,13 @@ ${contextPrompt}
 ${post.content || '(楼主没写正文)'}
 """
 **用户 "${socialProfile.name}" 刚在帖子下发的评论**: "${userContent}"
-
+${directionPrompt}
 请基于楼主帖子的【标题 + 正文】+ 用户的评论上下文，生成 1-3 条对用户这条评论的回复，要扣题，不能脱离正文凭空发挥。
 ${identityMap}
 
 ### 禁令
 - **绝对禁止** \`author\` 等于或近似 "${socialProfile.name}" (用户自己)。回复必须来自其他人。
+- 路人回复的 \`author\` 必须是全新的网名，绝对不能与上方【发帖人列表】中任何马甲网名重合。
 
 ### 输出格式 (JSON Array)
 [
@@ -1024,59 +1149,95 @@ ${identityMap}
         <div className="h-full w-full bg-gradient-to-br from-rose-50 via-slate-50 to-teal-50 flex flex-col font-sans relative text-slate-900 overflow-hidden">
             
             {/* --- Modals (Settings, Share) --- */}
-            <Modal isOpen={showSettings} title="身份管理" onClose={() => setShowSettings(false)}>
+            <Modal isOpen={showSettings} title="论坛与马甲管理" onClose={() => setShowSettings(false)}>
                 <div className="space-y-6">
                     <div className="max-h-[50vh] overflow-y-auto no-scrollbar space-y-6 px-1">
+                        {/* 新增：全局生成方向控制输入框 */}
+                        <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">论坛全局生成内容方向控制</label>
+                            <textarea
+                                value={localStorage.getItem('spark_global_direction') || ''}
+                                onChange={(e) => {
+                                    localStorage.setItem('spark_global_direction', e.target.value);
+                                    // 重新触发组件刷新以同步状态
+                                    addToast('生成方向已更新', 'info');
+                                }}
+                                placeholder="输入生成帖子的方向，例如：多生成情感吐槽，少生成技术帖子..."
+                                className="w-full h-16 text-xs text-slate-700 bg-white border border-slate-100 rounded-xl p-2 resize-none outline-none focus:border-[#ff2442] transition-colors"
+                            />
+                        </div>
+
                         <p className="text-xs text-slate-400 bg-slate-50 p-2 rounded-lg">
-                            为角色添加“马甲”(Sub-Accounts)。AI 发帖时会根据内容选择合适的身份。
+                            为角色添加“马甲”(Sub-Accounts)。AI 发帖时会根据内容选择合适的身份。你可以勾选/取消勾选左侧的开关来控制是否允许该角色在论坛发帖和评论。
                         </p>
                         {/* 分组筛选（没建分组时不渲染） */}
                         <CharacterGroupFilterBar characters={characters} groups={characterGroups} value={identityGroupId} onChange={setIdentityGroupId} className="!mt-3 -mx-1 px-1" />
-                        {filterCharactersByGroup(characters, characterGroups, identityGroupId).map(c => (
-                            <div key={c.id} className="space-y-3 pb-4 border-b border-slate-50">
-                                <div className="flex items-center gap-2">
-                                    <img src={c.avatar} className="w-6 h-6 rounded-full object-cover" />
-                                    <span className="text-sm font-bold text-slate-700">{c.name}</span>
-                                    <button onClick={() => addSubAccount(c.id)} className="ml-auto text-[10px] bg-[#ff2442] text-white px-2 py-1 rounded-full shadow-sm active:scale-95 transition-transform">+ 添加马甲</button>
-                                </div>
-                                
-                                <div className="space-y-2 pl-4 border-l-2 border-slate-100">
-                                    {(characterHandles[c.id] || []).map((acct) => (
-                                        <div key={acct.id} className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm space-y-2 relative group">
-                                            <div className="flex gap-2">
-                                                <div className="flex-1">
-                                                    <label className="text-[9px] text-slate-400 uppercase font-bold">网名 (Handle)</label>
+                        {filterCharactersByGroup(characters, characterGroups, identityGroupId).map(c => {
+                            const isDisabled = JSON.parse(localStorage.getItem('spark_disabled_handles') || '[]').includes(c.id);
+                            return (
+                                <div key={c.id} className="space-y-3 pb-4 border-b border-slate-50">
+                                    <div className="flex items-center gap-2">
+                                        <input 
+                                            type="checkbox" 
+                                            checked={!isDisabled} 
+                                            onChange={(e) => {
+                                                const disabledIds = JSON.parse(localStorage.getItem('spark_disabled_handles') || '[]');
+                                                let nextDisabled;
+                                                if (e.target.checked) {
+                                                    nextDisabled = disabledIds.filter((id: string) => id !== c.id);
+                                                    addToast(`已允许 ${c.name} 在论坛发言`, 'success');
+                                                } else {
+                                                    nextDisabled = [...disabledIds, c.id];
+                                                    addToast(`已禁用 ${c.name} 在论坛发言`, 'info');
+                                                }
+                                                localStorage.setItem('spark_disabled_handles', JSON.stringify(nextDisabled));
+                                            }}
+                                            className="w-4 h-4 rounded text-[#ff2442] focus:ring-[#ff2442] cursor-pointer"
+                                            title="启用/禁用发帖与评论权限"
+                                        />
+                                        <img src={c.avatar} className="w-6 h-6 rounded-full object-cover" />
+                                        <span className="text-sm font-bold text-slate-700">{c.name}</span>
+                                        <button onClick={() => addSubAccount(c.id)} className="ml-auto text-[10px] bg-[#ff2442] text-white px-2 py-1 rounded-full shadow-sm active:scale-95 transition-transform">+ 添加马甲</button>
+                                    </div>
+                                    
+                                    <div className="space-y-2 pl-4 border-l-2 border-slate-100">
+                                        {(characterHandles[c.id] || []).map((acct) => (
+                                            <div key={acct.id} className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm space-y-2 relative group">
+                                                <div className="flex gap-2">
+                                                    <div className="flex-1">
+                                                        <label className="text-[9px] text-slate-400 uppercase font-bold">网名 (Handle)</label>
+                                                        <input 
+                                                            value={acct.handle} 
+                                                            onChange={(e) => updateSubAccount(c.id, acct.id, 'handle', e.target.value)} 
+                                                            className="w-full text-sm font-bold text-slate-800 border-b border-dashed border-slate-200 focus:border-[#ff2442] outline-none py-1" 
+                                                        />
+                                                    </div>
+                                                    <button 
+                                                        onClick={() => deleteSubAccount(c.id, acct.id)}
+                                                        className="text-slate-300 hover:text-red-400 p-1"
+                                                        title="删除"
+                                                    >
+                                                        ×
+                                                    </button>
+                                                </div>
+                                                <div>
+                                                    <label className="text-[9px] text-slate-400 uppercase font-bold">备注 (Context Note)</label>
                                                     <input 
-                                                        value={acct.handle} 
-                                                        onChange={(e) => updateSubAccount(c.id, acct.id, 'handle', e.target.value)} 
-                                                        className="w-full text-sm font-bold text-slate-800 border-b border-dashed border-slate-200 focus:border-[#ff2442] outline-none py-1" 
+                                                        value={acct.note} 
+                                                        onChange={(e) => updateSubAccount(c.id, acct.id, 'note', e.target.value)} 
+                                                        placeholder="例如: 吐槽号 / 认真模式"
+                                                        className="w-full text-xs text-slate-500 bg-slate-50 rounded px-2 py-1 focus:bg-white transition-colors outline-none" 
                                                     />
                                                 </div>
-                                                <button 
-                                                    onClick={() => deleteSubAccount(c.id, acct.id)}
-                                                    className="text-slate-300 hover:text-red-400 p-1"
-                                                    title="删除"
-                                                >
-                                                    ×
-                                                </button>
                                             </div>
-                                            <div>
-                                                <label className="text-[9px] text-slate-400 uppercase font-bold">备注 (Context Note)</label>
-                                                <input 
-                                                    value={acct.note} 
-                                                    onChange={(e) => updateSubAccount(c.id, acct.id, 'note', e.target.value)} 
-                                                    placeholder="例如: 吐槽号 / 认真模式"
-                                                    className="w-full text-xs text-slate-500 bg-slate-50 rounded px-2 py-1 focus:bg-white transition-colors outline-none" 
-                                                />
-                                            </div>
-                                        </div>
-                                    ))}
-                                    {(characterHandles[c.id]?.length || 0) === 0 && (
-                                        <div className="text-[10px] text-red-400 italic flex items-center gap-1"><Warning size={12} weight="bold" /> 请至少保留一个身份</div>
-                                    )}
+                                        ))}
+                                        {(characterHandles[c.id]?.length || 0) === 0 && (
+                                            <div className="text-[10px] text-red-400 italic flex items-center gap-1"><Warning size={12} weight="bold" /> 请至少保留一个身份</div>
+                                        )}
+                                    </div>
                                 </div>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                     <div className="flex gap-3 pt-2">
                         <button onClick={handleClearFeed} className="flex-1 py-3 bg-white border border-slate-200 text-slate-500 font-bold rounded-xl text-xs active:bg-slate-50">清空推荐流</button>

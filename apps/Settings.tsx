@@ -635,6 +635,12 @@ const Settings: React.FC = () => {
   const [luckinTestStatus, setLuckinTestStatus] = useState('');
   const [luckinTesting, setLuckinTesting] = useState(false);
 
+  // 生图与时间感知局部状态
+  const [timeSensAwareness, setTimeSensAwareness] = useState<boolean>(() => {
+      const stored = localStorage.getItem('sully_time_sens_awareness');
+      return stored !== 'false';
+  });
+
   // Proactive Push 加速器（Worker URL / VAPID 公钥写死在 proactivePushConfig.ts 常量里）
   const initialPushCfg = loadPushConfig();
   const ppAvailable = isPushConfigAvailable();
@@ -2529,6 +2535,30 @@ const Settings: React.FC = () => {
 	                        </div>
 	                    </div>
 	                </div>
+
+                {/* 简化时间感知开关 */}
+                <div className="pt-2">
+                    <div className="flex items-center justify-between bg-white/50 border border-slate-200/60 rounded-xl px-4 py-3 shadow-sm">
+                        <div className="pr-2">
+                            <span className="text-xs font-bold text-slate-600 block">🤖 简化时间与冷场感知</span>
+                            <p className="text-[9px] text-slate-400 mt-0.5 leading-relaxed">
+                                开启后角色仅感知天气/新闻，不注入精确时钟、回复慢抱怨及冷场时差计算，提升日常体验。
+                            </p>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                const nextValue = !timeSensAwareness;
+                                setTimeSensAwareness(nextValue);
+                                localStorage.setItem('sully_time_sens_awareness', String(nextValue));
+                                addToast(nextValue ? '已启用简化时间感知' : '已恢复完整时间感知', 'success');
+                            }}
+                            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors shrink-0 ${timeSensAwareness ? 'bg-emerald-500' : 'bg-slate-200'}`}
+                        >
+                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${timeSensAwareness ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                        </button>
+                    </div>
+                </div>
 
                 <div className="pt-2">
                      <div className="flex justify-between items-center mb-1.5 pl-1">

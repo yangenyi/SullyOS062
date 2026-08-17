@@ -555,6 +555,9 @@ export interface RealtimeConfig {
   weatherApiKey: string;  // OpenWeatherMap API Key（可选；留空走免 key 的 Open-Meteo）
   weatherCity: string;    // 城市名（如 "北京"、"Beijing"）
 
+  // 时间感知配置
+  timeSensAwarenessEnabled?: boolean; // 简化时间感知（只保留天气和新闻，不注入精确时钟、回复慢抱怨及冷场时差）
+
   // 新闻配置
   newsEnabled: boolean;
   newsApiKey?: string;

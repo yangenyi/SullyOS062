@@ -333,25 +333,41 @@ export const ContextBuilder = {
     ): string => {
         // skipTimeAwareness：见面纯架空时由调用方传入，彻底抑制时间注入（修「线下时间感知」关掉后仍漏时间）。
         if (char.timeAwarenessEnabled === false || timeOptions?.skipTimeAwareness) return '';
+        
+        // 读取简化时间感知全局配置
+        const timeSensAwareness = typeof localStorage !== 'undefined' 
+            ? localStorage.getItem('sully_time_sens_awareness') !== 'false'
+            : true;
+
         // 自定义时区（异国恋等）：开启后这里的"当前时间"按角色所在时区折算，并附时差提示，
         // 让查手机/人际关系/通话等所有直连 buildCoreContext 的路径都拿到正确的本地时间。
         const charTz = resolveCharTimeZone(char);
         const now = nowInTimeZone(charTz);
-        const h = now.getHours();
-        const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-        const timeOfDay =
-            h < 5 ? '凌晨' : h < 9 ? '早晨' : h < 12 ? '上午' : h < 14 ? '中午'
-            : h < 17 ? '下午' : h < 19 ? '傍晚' : h < 22 ? '晚上' : '深夜';
-        const dateStr = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`;
-        const timeStr = `${h.toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+        
         let context = `### 当前时间 (Now)\n`;
-        context += `现在是 ${dateStr} ${dayNames[now.getDay()]} ${timeOfDay} ${timeStr}。请据此自然地拥有真实的时间观念（早晚作息、工作日/周末、距离上次互动多久等），不要凭空假设时间。\n`;
-        const tzNote = tzAwarenessNote(charTz);
-        if (tzNote) context += `${tzNote.trim()}\n`;
-        // 距离上次联系多久（统一口径）：传了 lastInteractionTs 才注入。
-        // 让查手机/人际关系等无内联消息流的路径，也像聊天一样知道「用户多久没联系我了」。
-        const gapNote = interactionGapNote(timeOptions?.lastInteractionTs);
-        if (gapNote) context += gapNote;
+        
+        if (timeSensAwareness) {
+            // 简化模式：只给日期，不给具体时钟、时段和冷场时差
+            const dateStr = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`;
+            context += `现在是 ${dateStr}。请据此拥有真实的时间概念，不要凭空假设时间。\n`;
+        } else {
+            // 完整模式
+            const h = now.getHours();
+            const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+            const timeOfDay =
+                h < 5 ? '凌晨' : h < 9 ? '早晨' : h < 12 ? '上午' : h < 14 ? '中午'
+                : h < 17 ? '下午' : h < 19 ? '傍晚' : h < 22 ? '晚上' : '深夜';
+            const dateStr = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`;
+            const timeStr = `${h.toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+            context += `现在是 ${dateStr} ${dayNames[now.getDay()]} ${timeOfDay} ${timeStr}。请据此自然地拥有真实的时间观念（早晚作息、工作日/周末、距离上次互动多久等），不要凭空假设时间。\n`;
+            const tzNote = tzAwarenessNote(charTz);
+            if (tzNote) context += `${tzNote.trim()}\n`;
+            // 距离上次联系多久（统一口径）：传了 lastInteractionTs 才注入。
+            // 让查手机/人际关系等无内联消息流的路径，也像聊天一样知道「用户多久没联系我了」。
+            const gapNote = interactionGapNote(timeOptions?.lastInteractionTs);
+            if (gapNote) context += gapNote;
+        }
+        
         context += `\n`;
         return context;
     },

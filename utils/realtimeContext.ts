@@ -96,6 +96,7 @@ export const defaultRealtimeConfig: RealtimeConfig = {
     weatherEnabled: false,
     weatherApiKey: '',
     weatherCity: 'Beijing',
+    timeSensAwarenessEnabled: true,
     newsEnabled: false,
     newsApiKey: '',
     newsPlatforms: ['weibo', 'zhihu', 'baidu', 'bilibili', 'douyin'],
@@ -352,44 +353,14 @@ export const RealtimeContextManager = {
      */
     getTimeContext: (tz?: string) => {
         const now = nowInTimeZone(tz);
-        const hour = now.getHours();
-        const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-        const dayOfWeek = dayNames[now.getDay()];
-
-        let timeOfDay = '凌晨';
-        let mood = '安静';
-
-        if (hour >= 5 && hour < 9) {
-            timeOfDay = '早晨';
-            mood = '清新';
-        } else if (hour >= 9 && hour < 12) {
-            timeOfDay = '上午';
-            mood = '精神';
-        } else if (hour >= 12 && hour < 14) {
-            timeOfDay = '中午';
-            mood = '放松';
-        } else if (hour >= 14 && hour < 17) {
-            timeOfDay = '下午';
-            mood = '平静';
-        } else if (hour >= 17 && hour < 19) {
-            timeOfDay = '傍晚';
-            mood = '慵懒';
-        } else if (hour >= 19 && hour < 22) {
-            timeOfDay = '晚上';
-            mood = '温馨';
-        } else if (hour >= 22 || hour < 5) {
-            timeOfDay = '深夜';
-            mood = '安静';
-        }
-
         return {
             timestamp: now.toISOString(),
             dateStr: `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`,
-            timeStr: `${hour.toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`,
-            dayOfWeek,
-            timeOfDay,
-            mood,
-            hour,
+            timeStr: '',
+            dayOfWeek: '',
+            timeOfDay: '',
+            mood: '',
+            hour: now.getHours(),
             isWeekend: now.getDay() === 0 || now.getDay() === 6
         };
     },
@@ -424,8 +395,9 @@ export const RealtimeContextManager = {
         // 1. 时间与节日。tz 非空时按角色所在时区折算，两者同一个时区，否则同一段里
         //    日期和节日会打架。时差提示（tzAwarenessNote）统一由 ContextBuilder.buildCoreContext
         //    注入，这里不再追加，避免双份。
+        //    只保留日期，不再注入精确时刻与时间线描述
         const time = includeTime ? RealtimeContextManager.getTimeContext(tz) : null;
-        const timeLine = time ? `${time.dateStr} ${time.dayOfWeek} ${time.timeOfDay} ${time.timeStr}` : undefined;
+        const timeLine = time ? `${time.dateStr}` : undefined;
         const specialDates = includeTime ? RealtimeContextManager.checkSpecialDates(tz) : [];
 
         // 2. 天气（有没有 OWM key 都能取：无 key 走 Open-Meteo）

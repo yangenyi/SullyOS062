@@ -457,8 +457,9 @@ export const renderRealtimeWorldBlock = (input: RealtimeWorldRenderInput): strin
 
     // 1. 时间信息。时差提示（tzAwarenessNote）统一由 ContextBuilder.buildCoreContext 注入，
     //    这里不再追加，避免双份。
+    //    只保留日期，不注入精确时钟
     if (timeLine) {
-        parts.push(`📅 当前真实时间: ${timeLine}`);
+        parts.push(`📅 当前真实日期: ${timeLine}`);
     }
 
     // 2. 特殊日期（跟上面的「当前真实时间」同一个时区，否则同一段里日期和节日会打架）
