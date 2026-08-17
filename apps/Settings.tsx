@@ -2487,9 +2487,9 @@ const Settings: React.FC = () => {
                                             <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">生图 API 端点 (Endpoint)</label>
                                             <input type="text" value={localImageGenUrl} onChange={(e) => setLocalImageGenUrl(e.target.value)} placeholder="https://api.openai.com 或 SD端点..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-3 py-2 text-xs font-mono focus:bg-white transition-all" />
                                             <p className="text-[8px] text-slate-400 mt-1">
-                                                • OpenAI 格式填 <code className="bg-slate-100 px-0.5 font-mono text-[8px]">https://.../v1</code> 或留空使用上面 API 的中转生图端口<br/>
-                                                • Stable Diffusion WebUI 填 <code className="bg-slate-100 px-0.5 font-mono text-[8px]">http://127.0.0.1:7860/sdapi/v1</code><br/>
-                                                • NovelAI 端点填包含 <code className="bg-slate-100 px-0.5 font-mono text-[8px]">/generate</code> 或是 NovelAI 相关网关
+                                                • OpenAI 格式填 <code className="bg-slate-100 px-0.5 font-mono text-[8px]">{"https://.../v1"}</code> 或留空使用上面 API 的中转生图端口<br/>
+                                                • Stable Diffusion WebUI 填 <code className="bg-slate-100 px-0.5 font-mono text-[8px]">{"http://127.0.0.1:7860/sdapi/v1"}</code><br/>
+                                                • NovelAI 端点填包含 <code className="bg-slate-100 px-0.5 font-mono text-[8px]">{"/generate"}</code> 或是 NovelAI 相关网关
                                             </p>
                                         </div>
                                         <div className="group">
