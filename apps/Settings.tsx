@@ -2526,10 +2526,10 @@ const Settings: React.FC = () => {
                                         {imageGenTestResult && (
                                             <div className={`text-[11px] px-3 py-2 rounded-xl whitespace-pre-line leading-relaxed ${
                                                 imageGenTestResult.startsWith('✅') ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
-	                                        }`}>
-	                                            {imageGenTestResult}
-	                                        </div>
-	                                    )}
+                                            }`}>
+                                                {imageGenTestResult}
+                                            </div>
+                                        )}
 	                                </div>
 	                            )}
 	                        </div>
