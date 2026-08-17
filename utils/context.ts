@@ -331,10 +331,8 @@ export const ContextBuilder = {
         char: CharacterProfile,
         timeOptions?: { lastInteractionTs?: number; skipTimeAwareness?: boolean },
     ): string => {
-        // skipTimeAwareness：见面纯架空时由调用方传入，彻底抑制时间注入（修「线下时间感知」关掉后仍漏时间）。
+        // 修改：精简并彻底软化时间感知块，实现剧情连续，不进行精确报时（不向 AI 提供下午X点X分这种精确时间），彻底删除时间差提示，不抱怨回复慢，仅作为大致背景（周几、大致时段）参考。
         if (char.timeAwarenessEnabled === false || timeOptions?.skipTimeAwareness) return '';
-        // 自定义时区（异国恋等）：开启后这里的"当前时间"按角色所在时区折算，并附时差提示，
-        // 让查手机/人际关系/通话等所有直连 buildCoreContext 的路径都拿到正确的本地时间。
         const charTz = resolveCharTimeZone(char);
         const now = nowInTimeZone(charTz);
         const h = now.getHours();
@@ -342,8 +340,13 @@ export const ContextBuilder = {
         const timeOfDay =
             h < 5 ? '凌晨' : h < 9 ? '早晨' : h < 12 ? '上午' : h < 14 ? '中午'
             : h < 17 ? '下午' : h < 19 ? '傍晚' : h < 22 ? '晚上' : '深夜';
-        // 修改：完全去除系统时间感知对“距离上次互动多久/早晚作息/强制计算时间间隔”的注入，只留背景参考，确保断网真空感且不主动抱怨和报时
-        return '';
+        
+        let context = `### 当前状态 (Status)\n`;
+        context += `现在大约是 ${dayNames[now.getDay()]} ${timeOfDay}。你可以将其作为日常生活与叙事背景（如在深夜或清晨），但本场对话是默认连续的剧情。严禁主动说出具体的、如“下午16点35分”或“18:23”这类精确数字报时；严禁计算你与对方的消息回复时间差，不抱怨冷场，不抱怨或指责对方回复得慢。\n`;
+        const tzNote = tzAwarenessNote(charTz);
+        if (tzNote) context += `${tzNote.trim()}\n`;
+        context += `\n`;
+        return context;
     },
 
     /**

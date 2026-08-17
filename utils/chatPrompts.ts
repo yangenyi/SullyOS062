@@ -150,9 +150,22 @@ export const ChatPrompts = {
     },
 
     // 格式化时间差提示（tz 影响「深夜/清晨」判断，时差本身不变）
-    // 修改：去除回复慢的抱怨与时间差提示，让剧情默认完全连续
     getTimeGapHint: (lastMsg: Message | undefined, currentTimestamp: number, tz?: string): string => {
-        return '';
+        if (!lastMsg) return '';
+        const diffMs = currentTimestamp - lastMsg.timestamp;
+        const diffMins = Math.floor(diffMs / (1000 * 60));
+        const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+        const currentHour = nowInTimeZone(tz, new Date(currentTimestamp)).getHours();
+        const isNight = currentHour >= 23 || currentHour <= 6;
+        if (diffMins < 10) return ''; 
+        if (diffMins < 60) return `[系统提示: 距离上一条消息: ${diffMins} 分钟。短暂的停顿。]`;
+        if (diffHours < 6) {
+            if (isNight) return `[系统提示: 距离上一条消息: ${diffHours} 小时。现在是深夜/清晨。沉默是正常的（正在睡觉）。]`;
+            return `[系统提示: 距离上一条消息: ${diffHours} 小时。用户离开了一会儿。]`;
+        }
+        if (diffHours < 24) return `[系统提示: 距离上一条消息: ${diffHours} 小时。很长的间隔。]`;
+        const days = Math.floor(diffHours / 24);
+        return `[系统提示: 距离上一条消息: ${days} 天。用户消失了很久。请根据你们的关系做出反应（想念、生气、担心或冷漠）。]`;
     },
 
     // 按角色可见性过滤表情包分类与表情。
@@ -329,18 +342,16 @@ export const ChatPrompts = {
             if (forFirePack || timelyByWorker) return '';
             try {
                 if (config.weatherEnabled || config.newsEnabled) {
-                    // 时间行跟着角色的「时间感知」开关走：关掉的角色不该从天气块里读到
-                    // 「当前真实时间」，那是这个开关本来要挡住的东西。
+                    // 修改：天气和新闻模块正常工作，但强制 includeTime: false 屏蔽精确时间戳，让剧情自然连续、不报精确时间
                     const realtimeContext = await RealtimeContextManager.buildFullContext(config, charTz, {
-                        includeTime: char.timeAwarenessEnabled !== false,
+                        includeTime: false,
                     });
                     return `\n${realtimeContext}\n`;
                 }
-                // 基础当前时间 + 时差提示已由 ContextBuilder.buildCoreContext 统一注入（受 timeAwarenessEnabled
-                // 控制，按角色自定义时区折算）；这里只在关闭天气/新闻时补一条"今日特殊节日"，不再重复注入时间/时差，避免双份。
+                // 仅在关闭天气/新闻且存在今日特殊节日（如春节、情人节）时补一条节日主题作为闲聊背景，依然不注入时分秒精确时间
                 const specialDates = RealtimeContextManager.checkSpecialDates(charTz);
-                if (specialDates.length > 0 && char.timeAwarenessEnabled !== false) {
-                    return `\n### 【今日特殊】\n${specialDates.join('、')}\n`;
+                if (specialDates.length > 0) {
+                    return `\n### 【今日节日】\n${specialDates.join('、')}\n`;
                 }
                 return '';
             } catch (e) {
