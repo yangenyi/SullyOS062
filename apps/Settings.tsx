@@ -2530,8 +2530,8 @@ const Settings: React.FC = () => {
                                                 {imageGenTestResult}
                                             </div>
                                         )}
-	                                </div>
-	                            )}
+                                    </div>
+                                )}
 	                        </div>
 	                    </div>
 	                </div>
