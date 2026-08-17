@@ -151,21 +151,7 @@ export const ChatPrompts = {
 
     // 格式化时间差提示（tz 影响「深夜/清晨」判断，时差本身不变）
     getTimeGapHint: (lastMsg: Message | undefined, currentTimestamp: number, tz?: string): string => {
-        if (!lastMsg) return '';
-        const diffMs = currentTimestamp - lastMsg.timestamp;
-        const diffMins = Math.floor(diffMs / (1000 * 60));
-        const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-        const currentHour = nowInTimeZone(tz, new Date(currentTimestamp)).getHours();
-        const isNight = currentHour >= 23 || currentHour <= 6;
-        if (diffMins < 10) return ''; 
-        if (diffMins < 60) return `[系统提示: 距离上一条消息: ${diffMins} 分钟。短暂的停顿。]`;
-        if (diffHours < 6) {
-            if (isNight) return `[系统提示: 距离上一条消息: ${diffHours} 小时。现在是深夜/清晨。沉默是正常的（正在睡觉）。]`;
-            return `[系统提示: 距离上一条消息: ${diffHours} 小时。用户离开了一会儿。]`;
-        }
-        if (diffHours < 24) return `[系统提示: 距离上一条消息: ${diffHours} 小时。很长的间隔。]`;
-        const days = Math.floor(diffHours / 24);
-        return `[系统提示: 距离上一条消息: ${days} 天。用户消失了很久。请根据你们的关系做出反应（想念、生气、担心或冷漠）。]`;
+        return '';
     },
 
     // 按角色可见性过滤表情包分类与表情。
@@ -1088,20 +1074,7 @@ ${userProfile.name} 给你反馈时，别当成约束，当成信任——ta 在
         const charTz = resolveCharTimeZone(char);
 
         let timeGapHint = "";
-        if (historySlice.length >= 2) {
-            const currentMsg = historySlice[historySlice.length - 1];
-            // Skip proactive hint messages when computing time gap — find last REAL message
-            let lastRealMsg: Message | undefined;
-            for (let i = historySlice.length - 2; i >= 0; i--) {
-                const m = historySlice[i];
-                if (!m.metadata?.proactiveHint && !(m.role === 'assistant' && i > 0 && historySlice[i - 1]?.metadata?.proactiveHint)) {
-                    lastRealMsg = m;
-                    break;
-                }
-            }
-            // 时间感知强化开关：默认开启（undefined 视为 true），显式关掉后不再注入「距离上次聊天多久」提示
-            if (lastRealMsg && currentMsg && char.timeAwarenessEnabled !== false) timeGapHint = ChatPrompts.getTimeGapHint(lastRealMsg, currentMsg.timestamp, charTz);
-        }
+        // 已经移除了回复慢与冷场时差计算，不再计算 timeGapHint
 
         return {
             apiMessages: historySlice.map((m, index) => {

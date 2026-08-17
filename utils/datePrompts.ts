@@ -44,13 +44,13 @@ export const DATE_VOICE_GUIDE = `4. **语音情绪（跟立绘分开）**: \`[em
  * 时间，但只有"星期 + 时:分"，缺日期，而且没必要让 prompt 构建依赖 React 状态。
  */
 const getRealTimeStr = (tz?: string): string => {
-    // formatDate 自己会按 tz 折算，所以这里要喂真实时刻。
-    // nowInTimeZone 返回的 Date 是「本地 getter 读出来正好是角色墙上时间」的形式，
-    // 它的绝对时间戳已经被挪过一次——再交给 formatDate 就会多减一个时差。
+    // 线下已去除精确时钟报时，此函数只提供当前年月日和星期，不带具体时分。
     const realNow = Date.now();
     const wallClock = nowInTimeZone(tz, new Date(realNow));
     const days = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-    return `${ChatPrompts.formatDate(realNow, tz)} ${days[wallClock.getDay()]}`;
+    // formatDate 格式化出的字符串是 YYYY-MM-DD HH:MM，这里只截取年月日部分
+    const datePart = ChatPrompts.formatDate(realNow, tz).split(' ')[0];
+    return `${datePart} ${days[wallClock.getDay()]}`;
 };
 
 /** 线下时间感知开关：默认开启，显式关掉后见面 prompt 不再注入时间。 */
@@ -597,6 +597,20 @@ ${char.dateVoiceEnabled ? (getVoicePromptOverride('dateVoice') ?? DATE_VOICE_GUI
 
 ${preset.block}
 
+### 🌟 见面生存法则 (Highest Directive)
+1. **第一视角角色扮演**: 你必须以第一人称（"我"）进行回复。你的言行举止、内心状态和所有说话方式都必须完全融入角色，严禁出现任何打破第四面墙的旁白、扮演者备注、或技术术语。
+2. **关系演变与共同经历**: 你与用户之间的好感度、亲密度和关系是由你们在对话中共同经历的事件不断演变而来的。你要牢记和用户共同经历的事件，并从中提炼出符合你性格的对事件的理解、认知，以及你们之间关系的独特性。根据你们当前所处的关系阶段，自然地调整回应方式。
+3. **好感延迟与客观逻辑**: 拒绝开局满级深情。好感的建立应当极其缓慢、延迟体现。你的逻辑必须根据常识、你的性格以及已知信息（含你的经济基础、社会资源、核心能力、经历阅历等客观现实维度）进行合理推理。
+4. **独立轨迹与非讨好人格**: 你不是用户的 24 小时客服，也不是一味迎合的讨好型人格。你有自己独立的生活轨迹、工作、作息和边界，允许感到疲惫、冷淡、不耐烦。你有独立的立场与情绪（包括合理的怒意、疏离感），就事论事。
+5. **连贯性与氛围感**: 当你们处于线上聊天（ChatApp）与线下见面（DateApp）彼此切换时，剧情和记忆必须保持高度的连贯性，自然接续上一次相处的事件细节。
+6. **NSFW 行为规则 (仅在亲密互动与 NSFW 剧情场景中生效)**:
+   - 前戏为主，慢镜头拆解，放大生理细节与感官白描。
+   - 禁止任何概括句，用词必须详细直白，不回避具体描写。
+   - Dirty talk 必须符合人设。
+   - 严禁使用任何廉价的羞辱词。
+   - 文风可留白、可阴湿、可潮湿，重氛围感描写。
+   - 每轮生成的字数控制在 2000 字左右（长篇幅展开，无需受线上 3-5 条的限制）。
+
 ${digBlock}${povBlock}${extraBlock}### 场景上下文
 ${timeLine}- **Location**: 你们现在**面对面**。
 - **Context**: 参考历史记录。如果刚刚才看到开场白（Opening），请自然接话。
@@ -655,7 +669,7 @@ export const DatePrompts = {
         const limit = char.contextLimit || 500;
         const peekLimit = Math.min(limit, 50);
         const lastMsg = allMsgs[allMsgs.length - 1];
-        const gapHint = getTimeGapHint(lastMsg?.timestamp, charTz);
+        const gapHint = isDateTimeAwarenessOn(char) ? getTimeGapHint(lastMsg?.timestamp, charTz) : '';
 
         const { apiMessages } = ChatPrompts.buildMessageHistory(
             allMsgs,
@@ -677,22 +691,21 @@ export const DatePrompts = {
         const extraBlock = buildExtraStyleBlock(char.dateStyleConfig);
 
         // 根据时间间隔选择合适的分隔符
-        const contextSeparator = gapHint
+        const contextSeparator = (gapHint && isDateTimeAwarenessOn(char))
             ? `\n\n--- [TIME SKIP: ${gapHint}] ---\n\n`
             : `\n\n--- [SCENE CONTINUATION: 刚刚还在聊天，现在来到了面对面的场景] ---\n\n`;
 
         const peekInstructions = `
 ### 场景：感知 (Sense Presence)
-${dateTimeOn ? `当前时间: ${timeStr}\n` : ''}时间上下文: ${gapHint}
-
+${dateTimeOn ? `当前时间: ${timeStr}\n` : ''}${dateTimeOn ? `时间上下文: ${gapHint}\n` : ''}
 ### 任务
 你现在并不在和用户直接对话。用户正在悄悄靠近你所在的地点。
 请用**第三人称**描写一段话。
 描述：${char.name} 此时此刻正在做什么？周围环境是怎样的？状态如何？
 
 ### 逻辑检查
-1. **上下文连贯性**: 参考 [最近记录]（注意消息来源标签：[聊天]是文字聊天、[约会]是面对面、[通话]是语音通话）。如果有 [TIME SKIP] 且间隔很久，开启新场景；如果是 [SCENE CONTINUATION]，说明刚刚还在聊天，**必须**自然衔接最近的聊天话题和情绪状态，不要无视之前的对话内容。
-2. **状态一致性**: ${gapHint.includes('天') ? '如果间隔了很多天，可能在发呆、忙碌或者有点落寞。' : '根据最近的聊天内容和情绪来决定当前状态。如果刚聊完，角色的状态应该与聊天内容相呼应。'}
+1. **上下文连贯性**: 参考 [最近记录]（注意消息来源标签：[聊天]是文字聊天、[约会]是面对面、[通话]是语音通话）。如果${dateTimeOn ? `有 [TIME SKIP] 且间隔很久，开启新场景；如果` : ''}是 [SCENE CONTINUATION]，说明刚刚还在聊天，**必须**自然衔接最近的聊天话题和情绪状态，不要无视之前的对话内容。
+2. **状态一致性**: ${dateTimeOn && gapHint.includes('天') ? '如果间隔了很多天，可能在发呆、忙碌或者有点落寞。' : '根据最近的聊天内容和情绪来决定当前状态。如果刚聊完，角色的状态应该与聊天内容相呼应。'}
 3. **描写风格**: ${preset.peekHint}。${isObserveOn(char) ? '先按下方「观测协议」输出观测块，再开始描写内容（描写本身不要加任何前缀）。' : '不要输出任何前缀，直接输出描写内容。'}
 ${extraBlock ? `\n${extraBlock}` : ''}${isObserveOn(char) ? `\n${buildObserveBlock(char)}` : ''}`;
 

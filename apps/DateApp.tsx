@@ -999,7 +999,7 @@ const DateApp: React.FC = () => {
         return (
             <div className="h-full w-full bg-black relative flex flex-col font-sans overflow-hidden">
                 <div className="pt-24 flex flex-col items-center z-10 shrink-0">
-                     <div className="text-xs font-mono text-neutral-500 mb-2 tracking-[0.2em] font-medium">{virtualTime.day.toUpperCase()} {formatTime()}</div>
+                     <div className="text-xs font-mono text-neutral-500 mb-2 tracking-[0.2em] font-medium">{virtualTime.day.toUpperCase()}</div>
                      <h2 className="text-4xl font-light text-white tracking-[0.3em] uppercase">{char.name}</h2>
                 </div>
                 {peekLoading && (

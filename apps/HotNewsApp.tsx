@@ -18,7 +18,11 @@ const HotNewsApp: React.FC = () => {
         setLoading(true);
         setError(null);
         try {
-            await RealtimeContextManager.getSlottedHotNews(realtimeConfig);
+            try {
+                await RealtimeContextManager.getSlottedHotNews(realtimeConfig);
+            } catch (err) {
+                console.warn('getSlottedHotNews failed, fallback to local DB snapshot check', err);
+            }
             const { id } = RealtimeContextManager.getHotNewsSlot();
             let snap = await DB.getHotNewsSnapshot(id);
             if (!snap) snap = await DB.getLatestHotNewsSnapshot();

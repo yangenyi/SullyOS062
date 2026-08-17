@@ -359,13 +359,9 @@ export const ContextBuilder = {
                 : h < 17 ? '下午' : h < 19 ? '傍晚' : h < 22 ? '晚上' : '深夜';
             const dateStr = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日`;
             const timeStr = `${h.toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-            context += `现在是 ${dateStr} ${dayNames[now.getDay()]} ${timeOfDay} ${timeStr}。请据此自然地拥有真实的时间观念（早晚作息、工作日/周末、距离上次互动多久等），不要凭空假设时间。\n`;
+            context += `现在是 ${dateStr} ${dayNames[now.getDay()]} ${timeOfDay} ${timeStr}。请据此自然地拥有真实的时间观念（早晚作息、工作日/周末等），不要凭空假设时间。\n`;
             const tzNote = tzAwarenessNote(charTz);
             if (tzNote) context += `${tzNote.trim()}\n`;
-            // 距离上次联系多久（统一口径）：传了 lastInteractionTs 才注入。
-            // 让查手机/人际关系等无内联消息流的路径，也像聊天一样知道「用户多久没联系我了」。
-            const gapNote = interactionGapNote(timeOptions?.lastInteractionTs);
-            if (gapNote) context += gapNote;
         }
         
         context += `\n`;

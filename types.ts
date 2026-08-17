@@ -557,6 +557,7 @@ export interface RealtimeConfig {
 
   // 时间感知配置
   timeSensAwarenessEnabled?: boolean; // 简化时间感知（只保留天气和新闻，不注入精确时钟、回复慢抱怨及冷场时差）
+  dateTimeAwarenessEnabled?: boolean; // 线下是否开启时间感知（默认 true，false 时不注入任何时间）
 
   // 新闻配置
   newsEnabled: boolean;
