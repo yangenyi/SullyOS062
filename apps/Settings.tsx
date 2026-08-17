@@ -465,6 +465,16 @@ const Settings: React.FC = () => {
   const [localTemperature, setLocalTemperature] = useState<number>(
     typeof apiConfig.temperature === 'number' ? apiConfig.temperature : 0.85
   );
+  // 自定义 API 自动生图配置状态
+  const [localImageGenEnabled, setLocalImageGenEnabled] = useState<boolean>(apiConfig.imageGenEnabled === true);
+  const [localImageGenUrl, setLocalImageGenUrl] = useState<string>(apiConfig.imageGenUrl || '');
+  const [localImageGenKey, setLocalImageGenKey] = useState<string>(apiConfig.imageGenKey || '');
+  const [localImageGenPrompt, setLocalImageGenPrompt] = useState<string>(apiConfig.imageGenPrompt || '');
+  const [localImageGenNegativePrompt, setLocalImageGenNegativePrompt] = useState<string>(apiConfig.imageGenNegativePrompt || '');
+  const [localImageGenFaceLock, setLocalImageGenFaceLock] = useState<string>(apiConfig.imageGenFaceLock || '');
+  const [imageGenTesting, setImageGenTesting] = useState(false);
+  const [imageGenTestResult, setImageGenTestResult] = useState<string | null>(null);
+  const [showImageGenSettings, setShowImageGenSettings] = useState(false);
   const [localVisionEnabled, setLocalVisionEnabled] = useState(apiConfig.visionApi?.enabled === true);
   const [localVisionUrl, setLocalVisionUrl] = useState(apiConfig.visionApi?.baseUrl || '');
   const [localVisionKey, setLocalVisionKey] = useState(apiConfig.visionApi?.apiKey || '');
@@ -843,7 +853,17 @@ const Settings: React.FC = () => {
       setLocalModel(String(apiConfig.model || ''));
       setLocalStream(apiConfig.stream === true);
       setLocalTemperature(typeof apiConfig.temperature === 'number' ? apiConfig.temperature : 0.85);
-  }, [apiConfig.baseUrl, apiConfig.apiKey, apiConfig.model, apiConfig.stream, apiConfig.temperature]);
+      setLocalImageGenEnabled(apiConfig.imageGenEnabled === true);
+      setLocalImageGenUrl(apiConfig.imageGenUrl || '');
+      setLocalImageGenKey(apiConfig.imageGenKey || '');
+      setLocalImageGenPrompt(apiConfig.imageGenPrompt || '');
+      setLocalImageGenNegativePrompt(apiConfig.imageGenNegativePrompt || '');
+      setLocalImageGenFaceLock(apiConfig.imageGenFaceLock || '');
+  }, [
+      apiConfig.baseUrl, apiConfig.apiKey, apiConfig.model, apiConfig.stream, apiConfig.temperature,
+      apiConfig.imageGenEnabled, apiConfig.imageGenUrl, apiConfig.imageGenKey,
+      apiConfig.imageGenPrompt, apiConfig.imageGenNegativePrompt, apiConfig.imageGenFaceLock
+  ]);
 
   useEffect(() => {
       setLocalVisionEnabled(apiConfig.visionApi?.enabled === true);
@@ -989,6 +1009,12 @@ const Settings: React.FC = () => {
         model: normalizeApiModel(localModel),
         stream: localStream,
         temperature: localTemperature,
+        imageGenEnabled: localImageGenEnabled,
+        imageGenUrl: normalizeApiBaseUrl(localImageGenUrl),
+        imageGenKey: normalizeApiCredential(localImageGenKey),
+        imageGenPrompt: localImageGenPrompt.trim(),
+        imageGenNegativePrompt: localImageGenNegativePrompt.trim(),
+        imageGenFaceLock: localImageGenFaceLock.trim(),
       });
       setNewPresetName('');
       setShowPresetModal(false);
@@ -1006,13 +1032,112 @@ const Settings: React.FC = () => {
       model: normalizeApiModel(localModel),
       stream: localStream,
       temperature: localTemperature,
+      imageGenEnabled: localImageGenEnabled,
+      imageGenUrl: normalizeApiBaseUrl(localImageGenUrl),
+      imageGenKey: normalizeApiCredential(localImageGenKey),
+      imageGenPrompt: localImageGenPrompt.trim(),
+      imageGenNegativePrompt: localImageGenNegativePrompt.trim(),
+      imageGenFaceLock: localImageGenFaceLock.trim(),
     };
     setLocalKey(nextConfig.apiKey);
     setLocalUrl(nextConfig.baseUrl);
     setLocalModel(nextConfig.model);
+    setLocalImageGenUrl(nextConfig.imageGenUrl);
+    setLocalImageGenKey(nextConfig.imageGenKey);
     commitApiConfig(nextConfig);
     setStatusMsg('配置已保存');
     setTimeout(() => setStatusMsg(''), 2000);
+  };
+
+  const handleTestImageGenApi = async () => {
+    const url = normalizeApiBaseUrl(localImageGenUrl);
+    const key = normalizeApiCredential(localImageGenKey);
+    if (!url) {
+      setImageGenTestResult('❌ 请先填写生图 API 服务端点');
+      return;
+    }
+    setImageGenTesting(true);
+    setImageGenTestResult(null);
+    try {
+      // 检查端点格式并判断该使用哪种 payload
+      const isSdWebui = url.includes('/sdapi/v1');
+      const isNovelAi = url.includes('/generate') || url.includes('/novelai');
+      let fetchUrl = url;
+      let headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      let body: any = {};
+
+      const prompt = `1girl, masterwork, cinematic lighting, ${localImageGenPrompt || ''} ${localImageGenFaceLock || ''}`.trim();
+      const negativePrompt = localImageGenNegativePrompt || 'nsfw, low quality, bad anatomy';
+
+      if (isSdWebui) {
+        fetchUrl = url.endsWith('/txt2img') ? url : `${url.replace(/\/+$/, '')}/txt2img`;
+        if (key) headers['Authorization'] = `Bearer ${key}`;
+        body = {
+          prompt,
+          negative_prompt: negativePrompt,
+          steps: 20,
+          width: 512,
+          height: 512,
+          batch_size: 1,
+        };
+      } else if (isNovelAi) {
+        // NovelAI 格式
+        if (key) headers['Authorization'] = `Bearer ${key}`;
+        body = {
+          input: prompt,
+          model: 'safe-diffusion',
+          parameters: {
+            width: 512,
+            height: 512,
+            negative_prompt: negativePrompt,
+          }
+        };
+      } else {
+        // 默认 OpenAI /v1/images/generations 格式
+        fetchUrl = url.endsWith('/images/generations') ? url : `${url.replace(/\/+$/, '')}/v1/images/generations`;
+        if (key) headers['Authorization'] = `Bearer ${key}`;
+        body = {
+          prompt,
+          n: 1,
+          size: '512x512',
+          response_format: 'b64_json',
+        };
+      }
+
+      const res = await fetch(fetchUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        // 尝试提取并回显生图结果大小以验证
+        let hasImage = false;
+        if (data.data?.[0]?.b64_json || data.data?.[0]?.url) {
+          hasImage = true;
+        } else if (data.images?.[0]) {
+          // SD format
+          hasImage = true;
+        } else if (data.image) {
+          // NovelAI raw/json
+          hasImage = true;
+        }
+        
+        if (hasImage) {
+          setImageGenTestResult('✅ 连通成功并成功接收到生成的图像响应数据！');
+        } else {
+          setImageGenTestResult('✅ 接口返回成功，但未识别到返回的图像，请确认接口格式与返回结构。');
+        }
+      } else {
+        const text = await res.text().catch(() => '');
+        setImageGenTestResult(`❌ HTTP ${res.status}: ${text.slice(0, 150)}`);
+      }
+    } catch (err: any) {
+      setImageGenTestResult(`❌ 连接生图 API 失败: ${err.message}`);
+    } finally {
+      setImageGenTesting(false);
+    }
   };
 
   const handleSaveVisionApi = () => {
@@ -2270,54 +2395,140 @@ const Settings: React.FC = () => {
                 </div>
 
                 {/* 高级（流式 / 温度）— 默认折叠，灰色低调，明确写"不建议修改" */}
-                <div className="pt-1">
-                    <button
-                        type="button"
-                        onClick={() => setShowApiAdvanced(v => !v)}
-                        className="text-[10px] text-slate-300 hover:text-slate-400 transition-colors flex items-center gap-1 pl-1 active:scale-95"
-                    >
-                        <span>高级（不建议修改）</span>
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-2.5 h-2.5 transition-transform ${showApiAdvanced ? 'rotate-180' : ''}`}>
-                            <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
-                        </svg>
-                    </button>
-                    {showApiAdvanced && (
-                        <div className="mt-2 pl-2 border-l-2 border-slate-100 space-y-3 py-2">
-                            <p className="text-[10px] text-slate-300 leading-relaxed">
-                                这两项绝大多数用户保持默认即可。除非接口报错"only stream supported"或对回复风格有强需求，否则不建议改。
-                            </p>
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <span className="text-[10px] text-slate-400">流式输出 (Stream)</span>
-                                    <p className="text-[9px] text-slate-300 mt-0.5">仅在你的 API 强制要求时打开</p>
-                                </div>
-                                <button
-                                    type="button"
-                                    onClick={() => setLocalStream(v => !v)}
-                                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${localStream ? 'bg-slate-400' : 'bg-slate-200'}`}
-                                >
-                                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${localStream ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                                </button>
-                            </div>
-                            <div>
+                <div className="pt-1 flex flex-col gap-2.5">
+                    <div>
+                        <button
+                            type="button"
+                            onClick={() => setShowApiAdvanced(v => !v)}
+                            className="text-[10px] text-slate-300 hover:text-slate-400 transition-colors flex items-center gap-1 pl-1 active:scale-95"
+                        >
+                            <span>高级（不建议修改）</span>
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-2.5 h-2.5 transition-transform ${showApiAdvanced ? 'rotate-180' : ''}`}>
+                                <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                            </svg>
+                        </button>
+                        {showApiAdvanced && (
+                            <div className="mt-2 pl-2 border-l-2 border-slate-100 space-y-3 py-2">
+                                <p className="text-[10px] text-slate-300 leading-relaxed">
+                                    这两项绝大多数用户保持默认即可。除非接口报错"only stream supported"或对回复风格有强需求，否则不建议改。
+                                </p>
                                 <div className="flex items-center justify-between">
-                                    <span className="text-[10px] text-slate-400">温度 (Temperature)</span>
-                                    <span className="text-[10px] font-mono text-slate-400">{localTemperature.toFixed(2)}</span>
+                                    <div>
+                                        <span className="text-[10px] text-slate-400">流式输出 (Stream)</span>
+                                        <p className="text-[9px] text-slate-300 mt-0.5">仅在你的 API 强制要求时打开</p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setLocalStream(v => !v)}
+                                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${localStream ? 'bg-slate-400' : 'bg-slate-200'}`}
+                                    >
+                                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${localStream ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                    </button>
                                 </div>
-                                <input
-                                    type="range"
-                                    min="0"
-                                    max="2"
-                                    step="0.05"
-                                    value={localTemperature}
-                                    onChange={(e) => setLocalTemperature(parseFloat(e.target.value))}
-                                    className="w-full accent-slate-400 mt-1"
-                                />
-                                <p className="text-[9px] text-slate-300 mt-0.5">默认 0.85；只作用于聊天和约会的主回复</p>
+                                <div>
+                                    <div className="flex items-center justify-between">
+                                        <span className="text-[10px] text-slate-400">温度 (Temperature)</span>
+                                        <span className="text-[10px] font-mono text-slate-400">{localTemperature.toFixed(2)}</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="2"
+                                        step="0.05"
+                                        value={localTemperature}
+                                        onChange={(e) => setLocalTemperature(parseFloat(e.target.value))}
+                                        className="w-full accent-slate-400 mt-1"
+                                    />
+                                    <p className="text-[9px] text-slate-300 mt-0.5">默认 0.85；只作用于聊天和约会的主回复</p>
+                                </div>
                             </div>
-                        </div>
-                    )}
-                </div>
+                        )}
+                    </div>
+
+                    {/* 自定义 API 自动生图配置 */}
+                    <div>
+                        <button
+                            type="button"
+                            onClick={() => setShowImageGenSettings(v => !v)}
+                            className="text-[10px] text-slate-400 hover:text-slate-500 transition-colors flex items-center gap-1 pl-1 active:scale-95 font-semibold"
+                        >
+                            <span>🎨 AI 自动生图配置</span>
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-2.5 h-2.5 transition-transform ${showImageGenSettings ? 'rotate-180' : ''}`}>
+                                <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                            </svg>
+                        </button>
+                        {showImageGenSettings && (
+                            <div className="mt-2 pl-2 border-l-2 border-violet-200/80 space-y-4 py-2">
+                                <p className="text-[10px] text-slate-400 leading-relaxed">
+                                    当 AI 的回复中出现 <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-[9px] text-slate-600">[照片]</code> 标签时，系统会自动拦截并调用配置的第三方 API 异步生成多模态图片。支持 OpenAI 格式、SD WebUI 端点和 NovelAI 接口格式。
+                                </p>
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <span className="text-[10px] font-bold text-slate-500">启用自动生图拦截</span>
+                                        <p className="text-[9px] text-slate-400 mt-0.5">检测回复中的 [照片] 自动出图</p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setLocalImageGenEnabled(v => !v)}
+                                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${localImageGenEnabled ? 'bg-violet-500' : 'bg-slate-200'}`}
+                                    >
+                                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${localImageGenEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                                    </button>
+                                </div>
+                                {localImageGenEnabled && (
+                                    <div className="space-y-3 pt-1 animate-fade-in">
+                                        <div className="group">
+                                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">生图 API 端点 (Endpoint)</label>
+                                            <input type="text" value={localImageGenUrl} onChange={(e) => setLocalImageGenUrl(e.target.value)} placeholder="https://api.openai.com 或 SD端点..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-3 py-2 text-xs font-mono focus:bg-white transition-all" />
+                                            <p className="text-[8px] text-slate-400 mt-1">
+                                                • OpenAI 格式填 <code className="bg-slate-100 px-0.5 font-mono text-[8px]">https://.../v1</code> 或留空使用上面 API 的中转生图端口<br/>
+                                                • Stable Diffusion WebUI 填 <code className="bg-slate-100 px-0.5 font-mono text-[8px]">http://127.0.0.1:7860/sdapi/v1</code><br/>
+                                                • NovelAI 端点填包含 <code className="bg-slate-100 px-0.5 font-mono text-[8px]">/generate</code> 或是 NovelAI 相关网关
+                                            </p>
+                                        </div>
+                                        <div className="group">
+                                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">API Key</label>
+                                            <input type="password" value={localImageGenKey} onChange={(e) => setLocalImageGenKey(e.target.value)} placeholder="生图 Key..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-3 py-2 text-xs font-mono focus:bg-white transition-all" />
+                                        </div>
+                                        <div className="group">
+                                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">正面画风提示词模板 (Prompt Template)</label>
+                                            <textarea value={localImageGenPrompt} onChange={(e) => setLocalImageGenPrompt(e.target.value)} placeholder="e.g. anime style, masterwork, masterpiece, highly detailed..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-3 py-2 text-xs focus:bg-white transition-all h-14 resize-none leading-relaxed" />
+                                            <p className="text-[8px] text-slate-400">生成时会追加在 AI 回复所描述的画面后</p>
+                                        </div>
+                                        <div className="group">
+                                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">反面提示词 (Negative Prompt)</label>
+                                            <textarea value={localImageGenNegativePrompt} onChange={(e) => setLocalImageGenNegativePrompt(e.target.value)} placeholder="e.g. nsfw, low quality, bad hands, deformed..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-3 py-2 text-xs focus:bg-white transition-all h-14 resize-none leading-relaxed" />
+                                        </div>
+                                        <div className="group">
+                                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">角色特征锁脸提示词 (Face Lock Prompt)</label>
+                                            <input type="text" value={localImageGenFaceLock} onChange={(e) => setLocalImageGenFaceLock(e.target.value)} placeholder="e.g. 1girl, pink hair, green eyes..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-3 py-2 text-xs focus:bg-white transition-all" />
+                                            <p className="text-[8px] text-slate-400">保持生成的角色特征（发色、瞳色、服装等）相对固定</p>
+                                        </div>
+
+                                        <button
+                                            type="button"
+                                            onClick={handleTestImageGenApi}
+                                            disabled={imageGenTesting || !localImageGenUrl.trim()}
+                                            className={`w-full py-2 rounded-xl font-bold text-xs border active:scale-95 transition-all ${
+                                                imageGenTesting || !localImageGenUrl.trim()
+                                                    ? 'border-slate-200 text-slate-400 bg-slate-50'
+                                                    : 'border-violet-300 text-violet-600 bg-violet-50 hover:bg-violet-100'
+                                            }`}
+                                        >
+                                            {imageGenTesting ? '生图中...' : '🧪 测试生图连接'}
+                                        </button>
+                                        {imageGenTestResult && (
+                                            <div className={`text-[11px] px-3 py-2 rounded-xl whitespace-pre-line leading-relaxed ${
+                                                imageGenTestResult.startsWith('✅') ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
+	                                        }`}>
+	                                            {imageGenTestResult}
+	                                        </div>
+	                                    )}
+	                                </div>
+	                            )}
+	                        </div>
+	                    </div>
+	                </div>
 
                 <div className="pt-2">
                      <div className="flex justify-between items-center mb-1.5 pl-1">
@@ -2865,7 +3076,7 @@ const Settings: React.FC = () => {
                 让AI角色感知真实世界：天气、新闻热点、当前时间。角色可以根据天气关心你、聊聊最近的热点话题。
             </p>
 
-            <div className="grid grid-cols-5 gap-2 text-center">
+            <div className="grid grid-cols-2 gap-2 text-center">
                 <div className={`py-3 rounded-xl text-xs font-bold ${rtWeatherEnabled ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-50 text-slate-400'}`}>
                     <div className="text-lg mb-1">{rtWeatherEnabled ? <img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/2600.png" className="w-5 h-5 inline" alt="" /> : <img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f32b.png" className="w-5 h-5 inline" alt="" />}</div>
                     天气
@@ -2874,62 +3085,10 @@ const Settings: React.FC = () => {
                     <div className="text-lg mb-1">{rtNewsEnabled ? <img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4f0.png" className="w-5 h-5 inline" alt="" /> : <img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4c4.png" className="w-5 h-5 inline" alt="" />}</div>
                     新闻
                 </div>
-                <div className={`py-3 rounded-xl text-xs font-bold ${rtNotionEnabled ? 'bg-orange-50 text-orange-600' : 'bg-slate-50 text-slate-400'}`}>
-                    <div className="text-lg mb-1">{rtNotionEnabled ? <img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4dd.png" className="w-5 h-5 inline" alt="" /> : <img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4cb.png" className="w-5 h-5 inline" alt="" />}</div>
-                    Notion
-                </div>
-                <div className={`py-3 rounded-xl text-xs font-bold ${rtFeishuEnabled ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-50 text-slate-400'}`}>
-                    <div className="text-lg mb-1">{rtFeishuEnabled ? <img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4d2.png" className="w-5 h-5 inline" alt="" /> : <img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4cb.png" className="w-5 h-5 inline" alt="" />}</div>
-                    飞书
-                </div>
-                <div className={`py-3 rounded-xl text-xs font-bold ${rtXhsEnabled ? 'bg-red-50 text-red-600' : 'bg-slate-50 text-slate-400'}`}>
-                    <div className="text-lg mb-1">{rtXhsEnabled ? <img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4d5.png" className="w-5 h-5 inline" alt="" /> : <img src="https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/1f4cb.png" className="w-5 h-5 inline" alt="" />}</div>
-                    小红书
-                </div>
             </div>
         </SettingsSection>
 
-        {/* MCP 工具服务器（高级玩法）—— 通用外接工具，独立于实时感知 */}
-        <SettingsSection
-            title="MCP 工具服务器"
-            badge={<span className="text-[9px] bg-violet-100 text-violet-600 px-1.5 py-0.5 rounded-full font-bold shrink-0">高级玩法</span>}
-            icon={
-                <div className="p-2 bg-violet-100/50 rounded-xl text-violet-600">
-                    <PlugsConnected size={16} weight="fill" />
-                </div>
-            }
-            actions={
-                <>
-                    <button
-                        onClick={() => { trackEvent('打开「MCP 是什么」说明弹窗'); setShowMcpHelp(true); }}
-                        aria-label="MCP 是什么？"
-                        className="w-7 h-7 rounded-full border border-slate-200 bg-white text-[12px] font-bold text-slate-400 active:scale-90 transition-all"
-                    >?</button>
-                    <button onClick={() => { trackEvent('打开MCP工具服务器配置'); setShowMcpModal(true); }} className="text-[10px] bg-violet-100 text-violet-600 px-3 py-1.5 rounded-full font-bold shadow-sm active:scale-95 transition-transform">
-                        配置
-                    </button>
-                </>
-            }
-        >
-            <p className="text-xs text-slate-500 leading-relaxed">
-                给角色外接任意标准 MCP 工具服务器：记忆库、联网搜索、笔记、智能家居……接上什么，角色就多什么本事。
-            </p>
-            <p className="text-[10px] text-amber-600 mt-2 leading-relaxed bg-amber-50/80 border border-amber-100 rounded-lg px-2 py-1.5">
-                💡 这个板块推荐<b>本身就在用 MCP</b> 的玩家：你需要自己准备并维护工具服务器。
-                完全没听说过 MCP 的话，跳过这里不影响任何其他功能；真想入坑就先点「?」看说明。
-            </p>
-            {(() => {
-                const list = loadMcpServers();
-                if (!list.length) return null;
-                const on = list.filter(s => s.enabled && s.tools?.length);
-                const toolCount = on.reduce((n, s) => n + (s.tools?.length || 0), 0);
-                return (
-                    <p className="text-[10px] text-slate-400 mt-2">
-                        已配置 {list.length} 个服务器 · {on.length} 个启用中{toolCount ? ` · 共 ${toolCount} 个工具` : ''}
-                    </p>
-                );
-            })()}
-        </SettingsSection>
+        {/* MCP 功能版块已被隐藏 */}
 
         {/* ───────── 推送凭据 (VAPID) ───────── */}
         {/* VAPID 公私钥, 与 Proactive / Instant Push 共用一份 — 独立成块, 避免再被当成 */}
@@ -3187,28 +3346,7 @@ const Settings: React.FC = () => {
             </p>
         </SettingsSection>
 
-        {/* ───────── 主动消息 2.0（定时推送） ───────── */}
-        <section className="bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50">
-            <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                    <div className="p-2 bg-violet-100/60 rounded-xl text-violet-600">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                        </svg>
-                    </div>
-                    <h2 className="text-sm font-semibold text-slate-600 tracking-wider">主动消息 2.0</h2>
-                </div>
-                <button
-                    onClick={() => { trackEvent('打开主动消息2.0配置'); setShowAmsg2Modal(true); }}
-                    className="text-[10px] bg-violet-100 text-violet-600 px-3 py-1.5 rounded-full font-bold shadow-sm active:scale-95 transition-transform"
-                >
-                    配置
-                </button>
-            </div>
-            <p className="text-xs text-slate-500 leading-relaxed">
-                角色到点自动给你发消息，App 关着也能收。需要你自己部署一个 Cloudflare Worker（自带 D1 数据库 + 定时触发），在配置里填地址即可。聊天上云（即时对话）与定时主动消息都由它承担。
-            </p>
-        </section>
+        {/* 已隐藏主动消息 2.0 板块 */}
 
         {/* 自定义网络代理 — 刻意低调的高级入口。默认折叠，不主动指引基本发现不了。
             普通用户无需配置：默认走作者部署的公共 Worker，所有功能开箱即用。 */}
@@ -3915,263 +4053,9 @@ const Settings: React.FC = () => {
                   )}
               </div>
 
-              {/* Notion 配置 */}
-              <div className="bg-orange-50/50 p-4 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                          <NotePencil size={20} weight="fill" />
-                          <span className="text-sm font-bold text-orange-700">Notion 日记</span>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" checked={rtNotionEnabled} onChange={e => setRtNotionEnabled(e.target.checked)} className="sr-only peer" />
-                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-orange-500"></div>
-                      </label>
-                  </div>
-                  {rtNotionEnabled && (
-                      <div className="space-y-2">
-                          <div>
-                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Notion Integration Token</label>
-                              <input type="password" value={rtNotionKey} onChange={e => setRtNotionKey(e.target.value)} className="w-full bg-white/80 border border-orange-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="ntn_... 或 secret_..." />
-                          </div>
-                          <div>
-                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Database ID</label>
-                              <input type="text" value={rtNotionDbId} onChange={e => setRtNotionDbId(e.target.value)} className="w-full bg-white/80 border border-orange-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="从数据库URL复制" />
-                          </div>
-                          <button onClick={testNotionApi} className="w-full py-2 bg-orange-100 text-orange-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">测试Notion连接</button>
-                          <div className="border-t border-orange-200/50 pt-2 mt-2">
-                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">笔记数据库 ID（可选）</label>
-                              <input type="text" value={rtNotionNotesDbId} onChange={e => setRtNotionNotesDbId(e.target.value)} className="w-full bg-white/80 border border-orange-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="用户日常笔记的数据库ID" />
-                              <p className="text-[10px] text-orange-500/60 leading-relaxed mt-1">
-                                  填写后角色可以偶尔看到你的笔记标题，温馨地提起你写的内容。留空则不启用。
-                              </p>
-                          </div>
-                          <p className="text-[10px] text-orange-500/70 leading-relaxed">
-                               1. 在 <a href="https://www.notion.so/my-integrations" target="_blank" className="underline">Notion开发者</a> 创建Integration（新版 Token 以 ntn_ 开头，老版以 secret_ 开头，都能用）<br/>
-                               2. 创建一个日记数据库，添加"Name"(标题)和"Date"(日期)属性<br/>
-                               3. 在数据库右上角菜单中 Connect 你的 Integration<br/>
-                               Token 保存在本机配置中；启用后，所选数据库的请求会由网络 Worker 转发，项目不主动留存日记内容。
-                          </p>
-                      </div>
-                  )}
-              </div>
+              {/* 已经隐藏了 Notion、飞书、以及小红书自动化配置模块 */}
 
-              {/* 飞书配置 (中国区替代) */}
-              <div className="bg-indigo-50/50 p-4 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                          <Notebook size={20} weight="fill" />
-                          <span className="text-sm font-bold text-indigo-700">飞书日记</span>
-                          <span className="text-[9px] bg-indigo-100 text-indigo-500 px-1.5 py-0.5 rounded-full">中国区</span>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" checked={rtFeishuEnabled} onChange={e => setRtFeishuEnabled(e.target.checked)} className="sr-only peer" />
-                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500"></div>
-                      </label>
-                  </div>
-                  <p className="text-[10px] text-indigo-500/70 leading-relaxed">
-                      Notion 的中国区替代方案，无需翻墙。使用飞书多维表格存储日记。
-                  </p>
-                  {rtFeishuEnabled && (
-                      <div className="space-y-2">
-                          <div>
-                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">飞书 App ID</label>
-                              <input type="text" value={rtFeishuAppId} onChange={e => setRtFeishuAppId(e.target.value)} className="w-full bg-white/80 border border-indigo-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="cli_xxxxxxxx" />
-                          </div>
-                          <div>
-                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">飞书 App Secret</label>
-                              <input type="password" value={rtFeishuAppSecret} onChange={e => setRtFeishuAppSecret(e.target.value)} className="w-full bg-white/80 border border-indigo-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="xxxxxxxxxxxxxxxx" />
-                          </div>
-                          <div>
-                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">多维表格 App Token</label>
-                              <input type="text" value={rtFeishuBaseId} onChange={e => setRtFeishuBaseId(e.target.value)} className="w-full bg-white/80 border border-indigo-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="从多维表格URL中获取" />
-                          </div>
-                          <div>
-                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">数据表 Table ID</label>
-                              <input type="text" value={rtFeishuTableId} onChange={e => setRtFeishuTableId(e.target.value)} className="w-full bg-white/80 border border-indigo-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="tblxxxxxxxx" />
-                          </div>
-                          <button onClick={testFeishuApi} className="w-full py-2 bg-indigo-100 text-indigo-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">测试飞书连接</button>
-                          <p className="text-[10px] text-indigo-500/70 leading-relaxed">
-                               1. 在 <a href="https://open.feishu.cn/app" target="_blank" className="underline">飞书开放平台</a> 创建企业自建应用，获取 App ID 和 Secret<br/>
-                               2. 在应用权限中添加「多维表格」相关权限<br/>
-                               3. 创建一个多维表格，添加字段: 标题(文本)、内容(文本)、日期(日期)、心情(文本)、角色(文本)<br/>
-                               4. 从多维表格 URL 中获取 App Token 和 Table ID<br/>
-                               App Secret 保存在本机配置中；启用后，多维表格请求会由网络 Worker 转发，项目不主动留存表格内容。
-                          </p>
-                      </div>
-                  )}
-              </div>
-
-              {/* 小红书自动化 */}
-              <div className="bg-red-50/50 p-4 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                          <Book size={20} weight="fill" />
-                          <span className="text-sm font-bold text-red-700">小红书 · 本地</span>
-                          <span className="text-[9px] bg-red-100 text-red-500 px-1.5 py-0.5 rounded-full">MCP 兼容 / Skills</span>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" checked={rtXhsMcpEnabled && rtXhsMode === 'local'} onChange={e => { if (e.target.checked) { setRtXhsMcpEnabled(true); setRtXhsEnabled(true); setRtXhsMode('local'); } else { setRtXhsMcpEnabled(false); setRtXhsEnabled(false); } }} className="sr-only peer" />
-                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
-                      </label>
-                  </div>
-                  <p className="text-[10px] text-red-500/70 leading-relaxed">
-                      本地模式继续可用：xiaohongshu-mcp 走 MCP 协议，xhs-bridge / Skills 走本地 /api。MCP 保留兼容，但不再承诺随其上游版本持续适配；新配置建议使用下方持续维护的 Lite。
-                  </p>
-                  {rtXhsMcpEnabled && rtXhsMode === 'local' && (
-                      <div className="space-y-2">
-                          <div>
-                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">服务器 URL</label>
-                              <input value={rtXhsLocalUrl} onChange={e => setRtXhsLocalUrl(e.target.value)} className="w-full bg-white/80 border border-red-200 rounded-xl px-3 py-2 text-[11px] font-mono" placeholder="http://localhost:18060/mcp" />
-                          </div>
-                          <button onClick={testXhsMcp} className="w-full py-2 bg-red-100 text-red-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">测试连接</button>
-                          <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                  <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">小红书昵称</label>
-                                  <input value={rtXhsNickname} onChange={e => setRtXhsNickname(e.target.value)} className="w-full bg-white/80 border border-red-200 rounded-xl px-3 py-2 text-[11px]" placeholder="手动填写" />
-                              </div>
-                              <div>
-                                  <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">用户 ID</label>
-                                  <input value={rtXhsUserId} onChange={e => setRtXhsUserId(e.target.value)} className="w-full bg-white/80 border border-red-200 rounded-xl px-3 py-2 text-[11px] font-mono" placeholder="可选，用于查看主页" />
-                              </div>
-                          </div>
-                          <p className="text-[10px] text-red-500/70 leading-relaxed">
-                              <b>MCP 模式:</b> 下载 xiaohongshu-mcp + 运行脚本，URL 填 http://localhost:18060/mcp（代理则 18061/mcp）<br/>
-                              <b>Skills 模式:</b> URL 填 http://localhost:18061/api（需 Python + xhs-bridge.mjs，额外支持视频/长文）<br/>
-                              系统按 URL 结尾自动判断（/mcp 或 /api）。
-                          </p>
-                      </div>
-                  )}
-              </div>
-
-              {/* 小红书 Lite (云端) */}
-              <div className="bg-rose-50/60 p-4 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                          <Book size={20} weight="fill" />
-                          <span className="text-sm font-bold text-rose-700">小红书 Lite</span>
-                          <span className="text-[9px] bg-rose-100 text-rose-500 px-1.5 py-0.5 rounded-full">持续维护</span>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" checked={rtXhsMcpEnabled && rtXhsMode === 'lite'} onChange={e => { if (e.target.checked) { if (!window.confirm(XHS_RISK_TEXT + '\n\n确定要开启吗？')) return; setRtXhsMcpEnabled(true); setRtXhsEnabled(true); setRtXhsMode('lite'); } else { setRtXhsMcpEnabled(false); setRtXhsEnabled(false); } }} className="sr-only peer" />
-                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-500"></div>
-                      </label>
-                  </div>
-                  <p className="text-[10px] text-rose-500/70 leading-relaxed">
-                      免电脑、免扫码：粘贴一次小红书 / RedNote cookie，即可搜索、浏览、看详情及互动；国内小红书还支持发帖(带图)。地址已内置，无需填写。
-                  </p>
-                  <p className="text-[10px] text-amber-700 leading-relaxed bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">{XHS_RISK_TEXT}</p>
-                  {rtXhsMcpEnabled && rtXhsMode === 'lite' && (
-                      <div className="space-y-2">
-                          <div>
-                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">小红书 Cookie</label>
-                              <textarea value={rtXhsCookie} onChange={e => { setRtXhsCookie(e.target.value); setRtXhsPlatform(undefined); }} rows={2} className="w-full bg-white/80 border border-rose-200 rounded-xl px-3 py-2 text-[10px] font-mono resize-y" placeholder="a1=...; web_session=...; （从浏览器登录后复制完整 cookie）" />
-                          </div>
-                          <button onClick={testXhsMcp} className="w-full py-2 bg-rose-100 text-rose-600 text-xs font-bold rounded-xl active:scale-95 transition-transform">测试连接</button>
-                          <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                  <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">小红书昵称</label>
-                                  <input value={rtXhsNickname} onChange={e => setRtXhsNickname(e.target.value)} className="w-full bg-white/80 border border-rose-200 rounded-xl px-3 py-2 text-[11px]" placeholder="测试连接后自动获取" />
-                              </div>
-                              <div>
-                                  <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">用户 ID</label>
-                                  <input value={rtXhsUserId} onChange={e => setRtXhsUserId(e.target.value)} className="w-full bg-white/80 border border-rose-200 rounded-xl px-3 py-2 text-[11px] font-mono" placeholder="自动获取" />
-                              </div>
-                          </div>
-                          <div>
-                              <button type="button" onClick={() => { if (!rtXhsGuideOpen) trackEvent('展开获取 cookie 教程'); setRtXhsGuideOpen(v => !v); }} className="text-[11px] font-bold text-rose-600 underline">📖 点击获取 cookie 教程 {rtXhsGuideOpen ? '▲' : '▼'}</button>
-                              {rtXhsGuideOpen && (
-                                  <div className="mt-1 bg-white/70 rounded-lg p-2 space-y-1.5">
-                                      <pre className="text-[10px] text-slate-600 whitespace-pre-wrap font-sans leading-relaxed">{XHS_COOKIE_GUIDE}</pre>
-                                      <button type="button" onClick={async () => { try { await navigator.clipboard.writeText(XHS_COOKIE_GUIDE); trackEvent('复制 cookie 教程文本', { result: 'copied' }); addToast('教程已复制，可粘贴去问别的 AI', 'success'); } catch { trackEvent('复制 cookie 教程文本', { result: 'clipboard-failed' }); addToast('复制失败，请长按手动选择', 'error'); } }} className="w-full py-1.5 bg-rose-100 text-rose-600 text-[11px] font-bold rounded-lg active:scale-95 transition-transform">复制教程</button>
-                                  </div>
-                              )}
-                          </div>
-                          <p className="text-[10px] text-slate-400 leading-relaxed bg-slate-100/60 rounded-lg px-2 py-1.5">
-                              使用说明：Cookie 保存在本机配置中；使用 Lite 时会随请求发送到网络 Worker，用于登录校验和接口签名，当前开源 Worker 不主动留存。建议使用小号，并在退出账号或 Cookie 失效后及时更新。
-                          </p>
-                      </div>
-                  )}
-              </div>
-
-              {/* 麦当劳 MCP */}
-              <div className="bg-yellow-50/60 p-4 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                          <ForkKnife size={20} weight="fill" className="text-yellow-600" />
-                          <span className="text-sm font-bold text-yellow-700">麦当劳</span>
-                          <span className="text-[9px] bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded-full">官方 MCP</span>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" checked={mcdEnabled} onChange={e => handleMcdEnabledChange(e.target.checked)} className="sr-only peer" />
-                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-yellow-500"></div>
-                      </label>
-                  </div>
-                  <p className="text-[10px] text-yellow-700/70 leading-relaxed">
-                      启用后，在聊天里点 + 号 → 第二页 → 麦当劳，发送"麦请求"激活，角色就能为你查菜单、查门店、点麦乐送/到店取餐/团餐、积分兑券、查活动。
-                  </p>
-                  {mcdEnabled && (
-                      <div className="space-y-2">
-                          <div>
-                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">MCP Token (个人)</label>
-                              <input type="password" value={mcdToken} onChange={e => handleMcdTokenChange(e.target.value)} className="w-full bg-white/80 border border-yellow-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="去 open.mcd.cn/mcp 申请" />
-                          </div>
-                          <button onClick={testMcdApi} disabled={mcdTesting} className="w-full py-2 bg-yellow-100 text-yellow-700 text-xs font-bold rounded-xl active:scale-95 transition-transform disabled:opacity-60">
-                              {mcdTesting ? '测试中…' : '测试连接'}
-                          </button>
-                          {mcdTestStatus && (
-                              <div className={`p-2 rounded-lg text-[11px] whitespace-pre-line leading-relaxed ${mcdTestStatus.startsWith('✅') ? 'bg-emerald-50 text-emerald-700' : mcdTestStatus.startsWith('❌') ? 'bg-red-50 text-red-600' : 'bg-slate-50 text-slate-600'}`}>
-                                  {mcdTestStatus}
-                              </div>
-                          )}
-                          <p className="text-[10px] text-yellow-700/70 leading-relaxed">
-                              1. 访问 <a href="https://open.mcd.cn/mcp" target="_blank" className="underline">open.mcd.cn/mcp</a> 用麦当劳账号登录申请 Token<br/>
-                              2. Token 保存在本机配置中；使用点单功能时会随 MCP 请求由网络 Worker 转发，项目不主动留存<br/>
-                              3. 下单类操作涉及真实支付，角色会先复述清单等你确认再下单<br/>
-                              4. 仅中国大陆 (不含港澳台)
-                          </p>
-                      </div>
-                  )}
-              </div>
-
-              {/* 瑞幸 MCP */}
-              <div className="bg-blue-50/60 p-4 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                          <Coffee size={20} weight="fill" className="text-blue-600" />
-                          <span className="text-sm font-bold text-blue-700">瑞幸咖啡</span>
-                          <span className="text-[9px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">官方 MCP</span>
-                      </div>
-                      <label className="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" checked={luckinEnabled} onChange={e => handleLuckinEnabledChange(e.target.checked)} className="sr-only peer" />
-                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
-                      </label>
-                  </div>
-                  <p className="text-[10px] text-blue-700/70 leading-relaxed">
-                      启用后，在聊天里点 + 号 → 第二页 → 瑞一杯，发送"瑞一杯"激活，角色就能为你查门店、搜咖啡、选规格、下单到店自提、查取餐码。
-                  </p>
-                  {luckinEnabled && (
-                      <div className="space-y-2">
-                          <div>
-                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">MCP Token (个人)</label>
-                              <input type="password" value={luckinToken} onChange={e => handleLuckinTokenChange(e.target.value)} className="w-full bg-white/80 border border-blue-200 rounded-xl px-3 py-2 text-sm font-mono" placeholder="去 open.lkcoffee.com 登录后复制" />
-                          </div>
-                          <button onClick={testLuckinApi} disabled={luckinTesting} className="w-full py-2 bg-blue-100 text-blue-700 text-xs font-bold rounded-xl active:scale-95 transition-transform disabled:opacity-60">
-                              {luckinTesting ? '测试中…' : '测试连接'}
-                          </button>
-                          {luckinTestStatus && (
-                              <div className={`p-2 rounded-lg text-[11px] whitespace-pre-line leading-relaxed ${luckinTestStatus.startsWith('✅') ? 'bg-emerald-50 text-emerald-700' : luckinTestStatus.startsWith('❌') ? 'bg-red-50 text-red-600' : 'bg-slate-50 text-slate-600'}`}>
-                                  {luckinTestStatus}
-                              </div>
-                          )}
-                          <p className="text-[10px] text-blue-700/70 leading-relaxed">
-                              1. 访问 <a href="https://open.lkcoffee.com" target="_blank" className="underline">open.lkcoffee.com</a> 用瑞幸账号登录，复制 Token（有效期约 1 个月）<br/>
-                              2. Token 保存在本机配置中；使用点单功能时会随 MCP 请求由网络 Worker 转发，项目不主动留存<br/>
-                              3. 下单类操作涉及真实支付，角色会先复述清单等你确认再下单<br/>
-                              4. 上游需经 Worker 代理 (/mcp/luckin)，请确保已部署最新 worker
-                          </p>
-                      </div>
-                  )}
-              </div>
+              {/* 麦当劳与瑞幸 MCP 配置区域已隐藏 */}
 
               {/* 测试状态 */}
               {rtTestStatus && (
@@ -4182,74 +4066,7 @@ const Settings: React.FC = () => {
           </div>
       </Modal>
 
-      {/* MCP 工具服务器配置 Modal（高级玩法, 从实时感知里独立出来） */}
-      <Modal isOpen={showMcpModal} title="MCP 工具服务器" onClose={() => { setShowMcpModal(false); flushMcpToolConfigSync(); }}>
-          <div className="space-y-4">
-              <McpServersCard addToast={addToast} onMcpConfigChanged={() => {
-                  // MCP 配置变更只需重传 tool_config：提示词块与 tools 数组由 worker 在 fire 时
-                  // 从 tool_config 现场生成（见 mcpFireCore），不经过 fire_pack，没有陈旧问题，
-                  // 所以不用像实时感知那样连提示词一起刷（syncAmsgToolConfigAndPrompts）。
-                  // 这一份尤其不能传丢：删掉的服务器要是没同步上去，worker 半夜还会带着
-                  // 旧 token 去直连它。重试和底账由 syncAmsgToolConfig 负责。
-                  scheduleMcpToolConfigSync(() => syncAmsgToolConfig(realtimeConfig));
-              }} />
-          </div>
-      </Modal>
-
-      {/* MCP 帮助 Modal —— 面向完全不懂 MCP 的用户, 讲清"是什么/为什么要自备服务器/三条路" */}
-      <Modal isOpen={showMcpHelp} title="MCP 是什么？" onClose={() => setShowMcpHelp(false)}>
-          <div className="space-y-3 text-xs text-slate-600 leading-relaxed">
-              <div className="bg-violet-50/60 rounded-xl p-3 space-y-1.5">
-                  <p className="font-bold text-violet-700">🔌 给 AI 用的通用工具接口</p>
-                  <p>
-                      MCP（Model Context Protocol）是一套开放协议，相当于给角色开了个「外接技能插槽」：
-                      任何按这个标准做的工具服务器——记忆库、联网搜索、笔记、智能家居——插上就能用，
-                      角色会在聊天里自己决定什么时候调用。
-                  </p>
-              </div>
-              <div className="bg-sky-50/60 rounded-xl p-3 space-y-1.5">
-                  <p className="font-bold text-sky-700">🏠 为什么服务器要自己准备？</p>
-                  <p>
-                      本应用是<b>纯静态网页</b>——没有自己的后端服务器，所有请求都由你的浏览器直接发出，
-                      数据也全存在你本机。好处是隐私和自由都在你手里；代价是工具服务器没人替你跑，
-                      需要你自己准备，三选一：
-                  </p>
-                  <p>
-                      ☁️ <b>用现成的云端 MCP 服务</b>：对方给你一个公网 https 地址（可能还有 Token），直接填进配置即可。<br/>
-                      🖥️ <b>跑在自己电脑上</b>：电脑上的浏览器直接填 <code className="bg-white/80 px-1 rounded">http://localhost:端口</code>；
-                      想在手机上也能用，再配个内网穿透（如 Cloudflare Tunnel）。<br/>
-                      🚀 <b>自己部署到云上</b>：VPS / Cloudflare / Zeabur 等，任何设备随时可用。
-                  </p>
-              </div>
-              <div className="bg-amber-50/60 rounded-xl p-3 space-y-1.5">
-                  <p className="font-bold text-amber-700">🚧 测试连接报「Failed to fetch」？</p>
-                  <p>
-                      八成是浏览器的 CORS 跨域拦截（静态网页的另一个代价）。能改服务器就在服务器端配好 CORS；
-                      改不了就在配置里填「代理 URL」——本地跑一个小代理，或把仓库里的 Worker 代理部署到你自己的
-                      Cloudflare 账号，教程里都有现成步骤。
-                  </p>
-              </div>
-              <div className="space-y-2">
-                  <a
-                      href={MCP_USER_GUIDE_URL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={() => trackEvent('跳转 MCP 完整教程')}
-                      className="block w-full py-2.5 bg-violet-500 text-white text-center text-xs font-bold rounded-xl active:scale-95 transition-transform"
-                  >📖 打开完整教程（含部署示例）</a>
-                  <button
-                      type="button"
-                      onClick={async () => {
-                          const text = `请阅读这份教程，然后一步一步教我把 MCP 工具服务器接入 SullyOS。先问清楚我想接什么工具、准备部署在哪（云端/本地电脑/本地+内网穿透），再给对应路线的步骤：\n${MCP_USER_GUIDE_URL}`;
-                          try { await navigator.clipboard.writeText(text); trackEvent('复制 MCP 部署指引给 AI', { result: 'copied' }); addToast('已复制，去粘贴给你的 AI 吧', 'success'); }
-                          catch { trackEvent('复制 MCP 部署指引给 AI', { result: 'clipboard-failed' }); addToast('复制失败，请手动复制教程链接', 'error'); }
-                      }}
-                      className="w-full py-2.5 bg-violet-100 text-violet-700 text-xs font-bold rounded-xl active:scale-95 transition-transform"
-                  >🤖 复制链接给你的 AI，让它带你部署</button>
-                  <p className="text-[10px] text-slate-400 text-center">教程是自包含的，任何 AI 助手读完都能带你走完全程。</p>
-              </div>
-          </div>
-      </Modal>
+      {/* MCP 模态框配置已隐藏 */}
 
       {/* 确认重置 Modal */}
       <Modal

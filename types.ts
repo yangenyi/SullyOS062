@@ -281,6 +281,13 @@ export interface APIConfig {
   stream?: boolean;
   // Per-API temperature for chat / 约会 main calls. Missing → 0.85.
   temperature?: number;
+  // 自定义 API 自动生图配置
+  imageGenEnabled?: boolean;
+  imageGenUrl?: string;
+  imageGenKey?: string;
+  imageGenPrompt?: string;
+  imageGenNegativePrompt?: string;
+  imageGenFaceLock?: string;
 }
 
 export interface InstantPushConfig {

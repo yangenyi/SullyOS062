@@ -98,6 +98,12 @@ export interface BuildChatPayloadInput {
      * 出现两个钟、两份热搜、两套工具名。
      */
     timelyByWorker?: boolean;
+    /** 自定义生图拦截功能注入 */
+    imageGen?: {
+        enabled: boolean;
+        prompt?: string;
+        faceLock?: string;
+    };
 }
 
 export interface BuildChatPayloadResult {
@@ -334,6 +340,20 @@ export async function buildChatRequestPayload(input: BuildChatPayloadInput): Pro
     const htmlActive = !!htmlMode?.enabled;
     if (htmlActive) {
         systemPrompt += `\n\n${buildHtmlPrompt(htmlMode?.customPrompt)}`;
+    }
+
+    // ── 5.5 自定义生图拦截功能 ─────────────────────────────
+    if (input.imageGen?.enabled) {
+        systemPrompt += `\n\n[照片发送功能]
+如果你在聊天中想给对方发一张当下的场景照片、手头的实物照片、或者你自己的“自拍”，请在回复中包含以下标签并写清画面视觉描述：
+[照片]（这里写详细的画面视觉描述，例如：一个穿着粉色连衣裙在海边的少女，背景是温暖的夕阳，面带微笑）
+
+规则：
+- 系统检测到该标签后会自动在后台异步调用你拥有的绘图 API 进行图片绘制并插入到聊天流中；
+- 标签外你可以正常说“给你发了张自拍”或“刚才拍下的”类似的话；
+- 不要在正文中透露出关于“提示词”、“渲染”、“绘图 API”等有关技术细节，保持语气自然、沉浸；
+- 一次回复中只允许发送 1 张照片，即最多只能包含 1 个 [照片] 标签；
+- 画面视觉描述应当尽量具体、真实。`;
     }
 
     // ── 6. 思考链提示词 ───────────────────────────────────

@@ -622,6 +622,11 @@ export const useChatAI = ({
                     visionApiConfig: deps.apiConfig.visionApi,
                     mcdMiniSnap: mcdMiniOpen ? mcdMiniSnap : undefined,
                     luckinMiniSnap: luckinMiniOpen ? luckinMiniSnap : undefined,
+                    imageGen: {
+                        enabled: deps.apiConfig.imageGenEnabled === true,
+                        prompt: deps.apiConfig.imageGenPrompt,
+                        faceLock: deps.apiConfig.imageGenFaceLock,
+                    },
                 });
 
                 if (payload.flags.promptBuildSkipped) {
@@ -972,6 +977,11 @@ export const useChatAI = ({
                 luckinMiniSnap: luckinMiniOpen ? luckinMiniSnap : undefined,
                 luckinChat: luckinChatOn ? luckinChatRef?.current : undefined,
                 timelyByWorker: instantChatRoute,
+                imageGen: {
+                    enabled: apiConfig.imageGenEnabled === true,
+                    prompt: apiConfig.imageGenPrompt,
+                    faceLock: apiConfig.imageGenFaceLock,
+                },
             }));
             const systemPrompt = payload.systemPrompt;
             const cleanedApiMessages = payload.cleanedApiMessages;

@@ -3867,59 +3867,7 @@ const Chat: React.FC = () => {
             </div>
 
 
-            {/* Proactive Settings Modal */}
-            {char && (
-                <ProactiveSettingsModal
-                    isOpen={showProactiveModal}
-                    onClose={() => setShowProactiveModal(false)}
-                    char={char}
-                    isProactiveActive={isProactiveActive}
-                    onSave={(config) => {
-                        updateCharacter(char.id, { proactiveConfig: config });
-                        if (config.enabled) {
-                            startProactiveChat(config.intervalMinutes);
-                            // 界面只给 7 个档，但这个值是从持久化状态读回来的——导入的备份、
-                            // 老版本写进去的都可能是任意整数。收敛到写死的档位，其余归 custom。
-                            trackEvent('启动主动消息', {
-                                intervalMinutes: presetOrCustom(
-                                    String(config.intervalMinutes),
-                                    ['30', '60', '120', '240', '480', '720', '1440'],
-                                    '没设',
-                                ),
-                            });
-                            addToast(`已启动主动消息，每 ${config.intervalMinutes >= 60 ? (config.intervalMinutes / 60) + ' 小时' : config.intervalMinutes + ' 分钟'}发送一次`, 'success');
-                        } else {
-                            stopProactiveChat();
-                            addToast('已关闭主动消息', 'info');
-                        }
-                    }}
-                    onStop={() => {
-                        stopProactiveChat();
-                        updateCharacter(char.id, { proactiveConfig: { ...char.proactiveConfig!, enabled: false } });
-                        addToast('已停止主动消息', 'info');
-                    }}
-                />
-            )}
-
-            {/* 主动消息 2.0（云端 worker 定时任务）Settings Modal */}
-            {char && (
-                <ActiveMsg2SettingsModal
-                    isOpen={showActiveMsg2Modal}
-                    onClose={() => setShowActiveMsg2Modal(false)}
-                    char={char}
-                    apiConfig={apiConfig}
-                    userProfile={userProfile}
-                    groups={groups}
-                    realtimeConfig={realtimeConfig}
-                    // updater 形态：merge 在 setCharacters 的函数式 updater 里发生，
-                    // 拿到的 prev 是最新排队后的状态，不会被面板的渲染时快照盖掉
-                    // （角色在聊天里用工具排的任务就是这么丢的）。
-                    onSave={(updater) => updateCharacter(char.id, (prev) => ({
-                        activeMsg2Config: updater(prev.activeMsg2Config),
-                    }))}
-                    addToast={addToast}
-                />
-            )}
+            {/* 主动消息与主动消息 2.0 相关设置弹窗已在聊天详情中删除 */}
 
             {/* 思考链设置 Modal — 入口：聊天加号面板「展示思考」按钮长按 / 思考链卡片右上齿轮 */}
             {char && (
@@ -4115,7 +4063,7 @@ const Chat: React.FC = () => {
 
             {/* 情绪设置已嵌入日程 Modal（与日程强制同步开/关），不再单独渲染 */}
 
-            {/* 🍔 麦当劳小程序 - MCP 数据流按钮驱动, 协同聊天走主 pipeline (完整人设/记忆/日程) */}
+            {/* 🍔 麦当劳与瑞幸小程序及相关绑定逻辑已彻底去除 */}
             {memoryRepairOpen && char && (
                 <MemoryRepairPortal
                     char={char}
@@ -4136,44 +4084,6 @@ const Chat: React.FC = () => {
             {voiceFavoritesOpen && (
                 <VoiceFavoritesPortal onClose={() => setVoiceFavoritesOpen(false)} />
             )}
-
-            <McdMiniApp
-                open={mcdAppOpen}
-                onClose={() => setMcdAppOpen(false)}
-                char={char}
-                userProfile={userProfile}
-                messages={messages}
-                isTyping={isTyping}
-                onSendMessage={handleMcdMiniAppSend}
-                onStateChange={handleMcdMiniAppStateChange}
-                onConfirmOrder={handleMcdAppConfirm}
-            />
-
-            {/* 🦌 瑞幸小程序 - 与麦当劳同构 */}
-            <LuckinMiniApp
-                open={luckinAppOpen}
-                onClose={() => setLuckinAppOpen(false)}
-                char={char}
-                userProfile={userProfile}
-                messages={messages}
-                isTyping={isTyping}
-                onSendMessage={handleLuckinMiniAppSend}
-                onStateChange={handleLuckinMiniAppStateChange}
-                onConfirmOrder={handleLuckinAppConfirm}
-            />
-
-            {/* 🦌 瑞一杯定位选择 */}
-            <LuckinLocationModal
-                open={showLuckinLoc}
-                onClose={() => setShowLuckinLoc(false)}
-                onPick={onLuckinLocationPick}
-            />
-
-            {/* 🦌 瑞一杯使用说明 (首次自动弹 + banner ? 调出) */}
-            <LuckinHelpModal
-                open={showLuckinHelp}
-                onClose={() => setShowLuckinHelp(false)}
-            />
 
 
             {/* Forward Modal */}
