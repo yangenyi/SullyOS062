@@ -3852,11 +3852,6 @@ const Chat: React.FC = () => {
                     activeCategory={activeCategory}
                     onReroll={handleReroll}
                     canReroll={canReroll}
-                    isProactiveActive={isProactiveActive}
-                    mcdConfigured={mcdConfiguredFlag}
-                    mcdActivated={mcdActivated}
-                    luckinConfigured={luckinConfiguredFlag}
-                    luckinActivated={luckinActivated}
                     htmlModeEnabled={!!(char as any).htmlModeEnabled}
                     showThinkingChain={!!(char as any).showThinkingChain}
                     inputStyle={osTheme.chatInputStyle}

@@ -1146,6 +1146,22 @@ const Settings: React.FC = () => {
     }
   };
 
+  const handleSaveImageGen = () => {
+    const nextConfig = {
+      imageGenEnabled: localImageGenEnabled,
+      imageGenUrl: normalizeApiBaseUrl(localImageGenUrl),
+      imageGenKey: normalizeApiCredential(localImageGenKey),
+      imageGenPrompt: localImageGenPrompt.trim(),
+      imageGenNegativePrompt: localImageGenNegativePrompt.trim(),
+      imageGenFaceLock: localImageGenFaceLock.trim(),
+    };
+    setLocalImageGenUrl(nextConfig.imageGenUrl);
+    setLocalImageGenKey(nextConfig.imageGenKey);
+    updateApiConfig(nextConfig);
+    setImageGenTestResult(null);
+    addToast('生图配置已保存', 'success');
+  };
+
   const handleSaveVisionApi = () => {
     const nextVisionApi = {
       enabled: localVisionEnabled,
@@ -2451,90 +2467,6 @@ const Settings: React.FC = () => {
                         )}
                     </div>
 
-                    {/* 自定义 API 自动生图配置 */}
-                    <div>
-                        <button
-                            type="button"
-                            onClick={() => setShowImageGenSettings(v => !v)}
-                            className="text-[10px] text-slate-400 hover:text-slate-500 transition-colors flex items-center gap-1 pl-1 active:scale-95 font-semibold"
-                        >
-                            <span>🎨 AI 自动生图配置</span>
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className={`w-2.5 h-2.5 transition-transform ${showImageGenSettings ? 'rotate-180' : ''}`}>
-                                <path fillRule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
-                            </svg>
-                        </button>
-                        {showImageGenSettings && (
-                            <div className="mt-2 pl-2 border-l-2 border-violet-200/80 space-y-4 py-2">
-                                <p className="text-[10px] text-slate-400 leading-relaxed">
-                                    当 AI 的回复中出现 <code className="bg-slate-100 px-1 py-0.5 rounded font-mono text-[9px] text-slate-600">[照片]</code> 标签时，系统会自动拦截并调用配置的第三方 API 异步生成多模态图片。支持 OpenAI 格式、SD WebUI 端点和 NovelAI 接口格式。
-                                </p>
-                                <div className="flex items-center justify-between">
-                                    <div>
-                                        <span className="text-[10px] font-bold text-slate-500">启用自动生图拦截</span>
-                                        <p className="text-[9px] text-slate-400 mt-0.5">检测回复中的 [照片] 自动出图</p>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        onClick={() => setLocalImageGenEnabled(v => !v)}
-                                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${localImageGenEnabled ? 'bg-violet-500' : 'bg-slate-200'}`}
-                                    >
-                                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${localImageGenEnabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                                    </button>
-                                </div>
-                                {localImageGenEnabled && (
-                                    <div className="space-y-3 pt-1 animate-fade-in">
-                                        <div className="group">
-                                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">生图 API 端点 (Endpoint)</label>
-                                            <input type="text" value={localImageGenUrl} onChange={(e) => setLocalImageGenUrl(e.target.value)} placeholder="https://api.openai.com 或 SD端点..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-3 py-2 text-xs font-mono focus:bg-white transition-all" />
-                                            <p className="text-[8px] text-slate-400 mt-1">
-                                                • OpenAI 格式填 <code className="bg-slate-100 px-0.5 font-mono text-[8px]">{"https://.../v1"}</code> 或留空使用上面 API 的中转生图端口<br/>
-                                                • Stable Diffusion WebUI 填 <code className="bg-slate-100 px-0.5 font-mono text-[8px]">{"http://127.0.0.1:7860/sdapi/v1"}</code><br/>
-                                                • NovelAI 端点填包含 <code className="bg-slate-100 px-0.5 font-mono text-[8px]">{"/generate"}</code> 或是 NovelAI 相关网关
-                                            </p>
-                                        </div>
-                                        <div className="group">
-                                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">API Key</label>
-                                            <input type="password" value={localImageGenKey} onChange={(e) => setLocalImageGenKey(e.target.value)} placeholder="生图 Key..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-3 py-2 text-xs font-mono focus:bg-white transition-all" />
-                                        </div>
-                                        <div className="group">
-                                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">正面画风提示词模板 (Prompt Template)</label>
-                                            <textarea value={localImageGenPrompt} onChange={(e) => setLocalImageGenPrompt(e.target.value)} placeholder="e.g. anime style, masterwork, masterpiece, highly detailed..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-3 py-2 text-xs focus:bg-white transition-all h-14 resize-none leading-relaxed" />
-                                            <p className="text-[8px] text-slate-400">生成时会追加在 AI 回复所描述的画面后</p>
-                                        </div>
-                                        <div className="group">
-                                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">反面提示词 (Negative Prompt)</label>
-                                            <textarea value={localImageGenNegativePrompt} onChange={(e) => setLocalImageGenNegativePrompt(e.target.value)} placeholder="e.g. nsfw, low quality, bad hands, deformed..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-3 py-2 text-xs focus:bg-white transition-all h-14 resize-none leading-relaxed" />
-                                        </div>
-                                        <div className="group">
-                                            <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1 block">角色特征锁脸提示词 (Face Lock Prompt)</label>
-                                            <input type="text" value={localImageGenFaceLock} onChange={(e) => setLocalImageGenFaceLock(e.target.value)} placeholder="e.g. 1girl, pink hair, green eyes..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-3 py-2 text-xs focus:bg-white transition-all" />
-                                            <p className="text-[8px] text-slate-400">保持生成的角色特征（发色、瞳色、服装等）相对固定</p>
-                                        </div>
-
-                                        <button
-                                            type="button"
-                                            onClick={handleTestImageGenApi}
-                                            disabled={imageGenTesting || !localImageGenUrl.trim()}
-                                            className={`w-full py-2 rounded-xl font-bold text-xs border active:scale-95 transition-all ${
-                                                imageGenTesting || !localImageGenUrl.trim()
-                                                    ? 'border-slate-200 text-slate-400 bg-slate-50'
-                                                    : 'border-violet-300 text-violet-600 bg-violet-50 hover:bg-violet-100'
-                                            }`}
-                                        >
-                                            {imageGenTesting ? '生图中...' : '🧪 测试生图连接'}
-                                        </button>
-                                        {imageGenTestResult && (
-                                            <div className={`text-[11px] px-3 py-2 rounded-xl whitespace-pre-line leading-relaxed ${
-                                                imageGenTestResult.startsWith('✅') ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
-                                            }`}>
-                                                {imageGenTestResult}
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </div>
 
                 {/* 简化时间感知开关 */}
                 <div className="pt-2">
@@ -2639,6 +2571,47 @@ const Settings: React.FC = () => {
                     </div>
                 )}
             </div>
+        </SettingsSection>
+
+        {/* 独立生图配置：论坛动态与聊天 [照片] 标签共用。 */}
+        <SettingsSection
+            title="论坛与聊天生图"
+            badge={<span className={`text-[9px] font-bold px-2 py-1 rounded-full ${localImageGenEnabled ? 'bg-violet-100 text-violet-600' : 'bg-slate-100 text-slate-400'}`}>{localImageGenEnabled ? '已启用' : '未启用'}</span>}
+            icon={<div className="p-2 bg-violet-100/60 rounded-xl text-violet-600">🎨</div>}
+        >
+            <div className="space-y-3">
+                <p className="text-[10px] text-slate-400 leading-relaxed">论坛刷新时会根据动态正文自动配图；聊天回复出现 <code className="bg-slate-100 px-1 rounded">[照片]</code> 时也会触发。配置只保存在本机。</p>
+                <div className="flex items-center justify-between rounded-2xl border border-violet-100 bg-violet-50/60 p-3">
+                    <div><div className="text-xs font-bold text-slate-600">启用自动生图</div><p className="text-[10px] text-slate-400 mt-0.5">论坛动态和聊天照片标签共用</p></div>
+                    <button type="button" onClick={() => setLocalImageGenEnabled(v => !v)} className={`relative inline-flex h-6 w-11 items-center rounded-full ${localImageGenEnabled ? 'bg-violet-500' : 'bg-slate-200'}`}>
+                        <span className={`inline-block h-5 w-5 rounded-full bg-white shadow transition-transform ${localImageGenEnabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                    </button>
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-400 block mb-1">生图 API 地址</label>
+                    <input type="text" value={localImageGenUrl} onChange={e => setLocalImageGenUrl(e.target.value)} placeholder="https://.../v1 或 SD WebUI /generate" className="w-full bg-white/60 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-mono" />
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-400 block mb-1">API Key</label>
+                    <input type="password" value={localImageGenKey} onChange={e => setLocalImageGenKey(e.target.value)} placeholder="生图 API Key" className="w-full bg-white/60 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-mono" />
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-400 block mb-1">正面提示词</label>
+                    <textarea value={localImageGenPrompt} onChange={e => setLocalImageGenPrompt(e.target.value)} placeholder="anime style, highly detailed..." className="w-full bg-white/60 border border-slate-200 rounded-xl px-3 py-2 text-xs min-h-16 resize-y" />
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-400 block mb-1">反面提示词</label>
+                    <textarea value={localImageGenNegativePrompt} onChange={e => setLocalImageGenNegativePrompt(e.target.value)} placeholder="low quality, bad anatomy..." className="w-full bg-white/60 border border-slate-200 rounded-xl px-3 py-2 text-xs min-h-16 resize-y" />
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-slate-400 block mb-1">锁脸 / 角色特征提示词</label>
+                    <input type="text" value={localImageGenFaceLock} onChange={e => setLocalImageGenFaceLock(e.target.value)} placeholder="1girl, pink hair, green eyes..." className="w-full bg-white/60 border border-slate-200 rounded-xl px-3 py-2.5 text-xs" />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                    <button type="button" onClick={handleTestImageGenApi} disabled={imageGenTesting || !localImageGenUrl.trim()} className="py-2.5 rounded-xl border border-violet-200 bg-violet-50 text-violet-600 text-xs font-bold disabled:opacity-40">{imageGenTesting ? '测试中…' : '测试连接'}</button>
+                    <button type="button" onClick={handleSaveImageGen} className="py-2.5 rounded-xl bg-violet-500 text-white text-xs font-bold">保存生图配置</button>
+                </div>
+                {imageGenTestResult && <p className={`text-[10px] rounded-xl px-3 py-2 ${imageGenTestResult.startsWith('✅') ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-600'}`}>{imageGenTestResult}</p>}
             </div>
         </SettingsSection>
 
