@@ -2534,6 +2534,7 @@ const Settings: React.FC = () => {
                                 )}
                             </div>
                         )}
+                    </div>
 
                 {/* 简化时间感知开关 */}
                 <div className="pt-2">
