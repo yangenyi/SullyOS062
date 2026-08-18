@@ -27,6 +27,7 @@
 
 import { CharacterProfile, UserProfile, Message, Emoji, RealtimeConfig, GroupProfile } from '../types';
 import { DB } from './db';
+import { putImageBlob } from './blobRef';
 import { ChatParser, type FrozenMusicSong } from './chatParser';
 import { resolveCharTimeZone } from './timezone';
 import { NotionManager, FeishuManager, XhsNote } from './realtimeContext';
@@ -470,6 +471,24 @@ export async function applyAssistantPostProcessing(
     // 全函数落库一律走这里，别直接调 DB.saveMessage——漏一处就会出现气泡时间戳互相打架。
     const persistMessage: typeof DB.saveMessage = (msg) =>
         DB.saveMessage(messageTimestamp != null ? { ...msg, timestamp: messageTimestamp } : msg);
+    // Only the chat auto-image pipeline calls this helper. Forum post assets take a
+    // separate path and must not appear in the character album.
+    const saveGeneratedChatImage = async (url: string, prompt: string): Promise<void> => {
+        const timestamp = messageTimestamp ?? Date.now();
+        const chatContext = contextMsgs
+            .filter(message => typeof message.content === 'string' && message.content.trim())
+            .slice(-12)
+            .map(message => `${message.role === 'assistant' ? char.name : userProfile.name}: ${message.content}`);
+        await DB.saveGalleryImage({
+            id: `chat-image-${char.id}-${timestamp}-${Math.random().toString(36).slice(2, 8)}`,
+            charId: char.id,
+            url,
+            timestamp,
+            savedDate: new Date(timestamp).toISOString().slice(0, 10),
+            prompt,
+            chatContext,
+        } as any);
+    };
     const {
         setMessages,
         addToast,
@@ -574,6 +593,159 @@ export async function applyAssistantPostProcessing(
     // 在任何 lead-in/二轮渲染之前先剥掉仿卡片文本，防止它被 chunkText 拆成灰色普通气泡。
     const mimickedXhsShares = extractMimickedXhsShares(aiContent);
     aiContent = mimickedXhsShares.cleanedContent;
+
+    // 自定义 API 自动生图拦截与处理
+    let imageGenPromptDesc = '';
+    const photoRegex = /\[照片\]\s*[(（]([^）)]+)[)）]/i;
+    const photoMatch = aiContent.match(photoRegex);
+    const hasPhotoTag = aiContent.includes('[照片]');
+    const imgGenApi = api.effectiveApi as any;
+
+    if (hasPhotoTag && imgGenApi?.imageGenEnabled) {
+        if (photoMatch) {
+            imageGenPromptDesc = photoMatch[1].trim();
+            // 干净地移除整个 [照片]（描述） 块
+            aiContent = aiContent.replace(photoRegex, '').trim();
+        } else {
+            // 没有括号里的描述，直接以剥离掉 [照片] 后的其余回复正文作为出图描述
+            imageGenPromptDesc = aiContent.replace(/\[照片\]/gi, '').trim();
+            // 从当前回复文本中移除 [照片] 标签
+            aiContent = aiContent.replace(/\[照片\]/gi, '').trim();
+        }
+
+        if (imageGenPromptDesc) {
+            // 异步非阻塞执行：保证文字消息气泡的秒回和渐次打字呈现不受生图网络延迟影响
+            void (async () => {
+                try {
+                    hooks.addToast('📷 AI 正在为你自动生图中，请稍候...', 'info');
+
+                    const isSdWebui = imgGenApi.imageGenUrl?.includes('/sdapi/v1');
+                    const isNovelAi = imgGenApi.imageGenUrl?.includes('/generate') || imgGenApi.imageGenUrl?.includes('/novelai');
+                    let fetchUrl = imgGenApi.imageGenUrl || '';
+                    let headers: Record<string, string> = { 'Content-Type': 'application/json' };
+                    let body: any = {};
+
+                    const finalPrompt = `${imageGenPromptDesc}, ${imgGenApi.imageGenPrompt || ''}, ${imgGenApi.imageGenFaceLock || ''}`.trim().replace(/,\s*,/g, ',').replace(/,\s*$/, '');
+                    const finalNegativePrompt = imgGenApi.imageGenNegativePrompt || 'nsfw, low quality, bad anatomy, deformed';
+
+                    if (isSdWebui) {
+                        fetchUrl = fetchUrl.endsWith('/txt2img') ? fetchUrl : `${fetchUrl.replace(/\/+$/, '')}/txt2img`;
+                        if (imgGenApi.imageGenKey) headers['Authorization'] = `Bearer ${imgGenApi.imageGenKey}`;
+                        body = {
+                          prompt: finalPrompt,
+                          negative_prompt: finalNegativePrompt,
+                          steps: 20,
+                          width: 512,
+                          height: 512,
+                          batch_size: 1,
+                        };
+                    } else if (isNovelAi) {
+                        if (imgGenApi.imageGenKey) headers['Authorization'] = `Bearer ${imgGenApi.imageGenKey}`;
+                        body = {
+                          input: finalPrompt,
+                          model: 'safe-diffusion',
+                          parameters: {
+                            width: 512,
+                            height: 512,
+                            negative_prompt: finalNegativePrompt,
+                          }
+                        };
+                    } else {
+                        // 默认 OpenAI /v1/images/generations 格式
+                        fetchUrl = fetchUrl.endsWith('/images/generations') ? fetchUrl : `${fetchUrl.replace(/\/+$/, '')}/v1/images/generations`;
+                        if (imgGenApi.imageGenKey) headers['Authorization'] = `Bearer ${imgGenApi.imageGenKey}`;
+                        body = {
+                          prompt: finalPrompt,
+                          n: 1,
+                          size: '512x512',
+                          response_format: 'b64_json',
+                        };
+                    }
+
+                    const res = await fetch(fetchUrl, {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify(body),
+                    });
+
+                    if (res.ok) {
+                        const resData = await res.json();
+                        let base64Data = '';
+
+                        if (resData.data?.[0]?.b64_json) {
+                            base64Data = resData.data[0].b64_json;
+                        } else if (resData.data?.[0]?.url) {
+                            // URL 格式，先 fetch 拿到 blob 
+                            const imgRes = await fetch(resData.data[0].url);
+                            if (imgRes.ok) {
+                                const imgBlob = await imgRes.blob();
+                                const refUrl = await putImageBlob(imgBlob);
+                                await persistMessage({
+                                    charId: char.id,
+                                    role: 'assistant',
+                                    type: 'image',
+                                    content: refUrl,
+                                    metadata: { ...(mcdInheritMeta || {}) }
+                                } as any);
+                                try {
+                                    await saveGeneratedChatImage(refUrl, imageGenPromptDesc);
+                                } catch (galleryError) {
+                                    console.warn('[ImageGen] 聊天图片已发送，但写入相册失败:', galleryError);
+                                }
+                                setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+                                hooks.addToast('📷 照片生成发送成功！', 'success');
+                                return;
+                            }
+                        } else if (resData.images?.[0]) {
+                            // SD format (Base64)
+                            base64Data = resData.images[0];
+                        } else if (resData.image) {
+                            // NovelAI format (Base64/Binary)
+                            base64Data = resData.image;
+                        }
+
+                        if (base64Data) {
+                            // 将 Base64 格式转换为 Blob 存盘，保证统一的令牌和存储机制
+                            const mimeType = base64Data.startsWith('data:') ? (base64Data.match(/^data:([^;]+)/)?.[1] || 'image/png') : 'image/png';
+                            const pureBase64 = base64Data.startsWith('data:') ? base64Data.split(',')[1] : base64Data;
+                            const binary = atob(pureBase64);
+                            const len = binary.length;
+                            const bytes = new Uint8Array(len);
+                            for (let i = 0; i < len; i++) {
+                                bytes[i] = binary.charCodeAt(i);
+                            }
+                            const imgBlob = new Blob([bytes], { type: mimeType });
+                            const refUrl = await putImageBlob(imgBlob);
+
+                            await persistMessage({
+                                charId: char.id,
+                                role: 'assistant',
+                                type: 'image',
+                                content: refUrl,
+                                metadata: { ...(mcdInheritMeta || {}) }
+                            } as any);
+                            try {
+                                await saveGeneratedChatImage(refUrl, imageGenPromptDesc);
+                            } catch (galleryError) {
+                                console.warn('[ImageGen] 聊天图片已发送，但写入相册失败:', galleryError);
+                            }
+                            setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+                            hooks.addToast('📷 照片生成发送成功！', 'success');
+                        } else {
+                            hooks.addToast('❌ 自动出图成功，但未解析到图片内容。', 'error');
+                        }
+                    } else {
+                        const errText = await res.text().catch(() => '');
+                        console.error('[ImageGen] 自动生图 API 返回错误:', res.status, errText);
+                        hooks.addToast(`❌ 自动出图失败 (HTTP ${res.status})`, 'error');
+                    }
+                } catch (err: any) {
+                    console.error('[ImageGen] 自动生图异步管线执行异常:', err);
+                    hooks.addToast('❌ 自动出图失败，请检查配置与网络连通性。', 'error');
+                }
+            })();
+        }
+    }
 
     // ── 渲染基础设施 (提前声明, 供"执行功能前先展示本轮正文 A" + 末尾展示二轮结果 B 复用) ──
     // 引用/回复标签的匹配 + 清理正则 (提前声明避免 lead-in 渲染时落入 TDZ)。

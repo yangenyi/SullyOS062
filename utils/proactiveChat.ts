@@ -26,10 +26,31 @@ import {
 
 export interface ProactiveSchedule {
   charId: string;
-  intervalMs: number; // must be multiple of 30 * 60 * 1000
+  intervalMs: number;
+  /** Default-managed schedules draw a new interval after every delivery. */
+  randomized?: boolean;
 }
 
 type ProactiveScheduleMap = Record<string, ProactiveSchedule>;
+
+const RANDOM_MIN_INTERVAL_MS = 60 * 60 * 1000;
+const RANDOM_MAX_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
+function drawRandomIntervalMs(): number {
+  return RANDOM_MIN_INTERVAL_MS + Math.floor(
+    Math.random() * (RANDOM_MAX_INTERVAL_MS - RANDOM_MIN_INTERVAL_MS + 1),
+  );
+}
+
+function rollNextInterval(charId: string): ProactiveSchedule | null {
+  const schedules = loadSchedules();
+  const schedule = schedules[charId];
+  if (!schedule?.randomized) return schedule || null;
+  const next = { ...schedule, intervalMs: drawRandomIntervalMs() };
+  schedules[charId] = next;
+  saveSchedules(schedules);
+  return next;
+}
 type LastFireMap = Record<string, number>;
 
 const STORAGE_KEY = 'proactive_schedules';
@@ -162,8 +183,16 @@ function handleSWMessage(e: MessageEvent) {
     console.log(`[ProactiveChat] Ignoring duplicate trigger for ${charId} (fired ${Math.round((now - lastFire) / 1000)}s ago)`);
     return;
   }
+  // A previously registered cloud schedule may still fire on its former fixed
+  // cadence. The local randomized schedule is authoritative, so do not let an
+  // early worker wake-up generate a message or move the next due time.
+  if (lastFire > 0 && now - lastFire < schedule.intervalMs) {
+    console.log(`[ProactiveChat] Ignoring early worker trigger for ${charId}; local random interval is not due yet`);
+    return;
+  }
 
   setLastFireTime(charId, now);
+  rollNextInterval(charId);
   schedulePreciseTimer();
   void triggerCallback(charId);
 }
@@ -182,6 +211,7 @@ function checkOverdueSchedules() {
     if (lastFire > 0 && elapsed >= schedule.intervalMs) {
       console.log(`[ProactiveChat] Main-thread trigger: ${schedule.charId}, ${Math.round(elapsed / 60000)}min elapsed`);
       setLastFireTime(schedule.charId, now);
+      rollNextInterval(schedule.charId);
       syncSchedulesToSW();
       void triggerCallback(schedule.charId);
     }
@@ -303,7 +333,7 @@ export const ProactiveChat = {
     const clamped = Math.max(30, Math.round(intervalMinutes / 30) * 30);
     const intervalMs = clamped * 60 * 1000;
     const schedules = loadSchedules();
-    schedules[charId] = { charId, intervalMs };
+    schedules[charId] = { charId, intervalMs, randomized: false };
     saveSchedules(schedules);
     setLastFireTime(charId, Date.now());
     syncSchedulesToSW();
@@ -340,6 +370,43 @@ export const ProactiveChat = {
     }
 
     console.log(`[ProactiveChat] Stopped: ${charId}`);
+  },
+
+  /**
+   * Reconcile default random schedules with the current character list. This is
+   * intentionally independent from the removed settings UI: every character is
+   * eligible unless explicitly removed from the device.
+   */
+  reconcileRandom(charIds: string[]) {
+    const allowed = new Set(charIds);
+    const schedules = loadSchedules();
+    let changed = false;
+
+    for (const charId of Object.keys(schedules)) {
+      if (!allowed.has(charId)) {
+        delete schedules[charId];
+        removeLastFireTime(charId);
+        changed = true;
+      }
+    }
+    for (const charId of charIds) {
+      if (!schedules[charId]) {
+        schedules[charId] = { charId, intervalMs: drawRandomIntervalMs(), randomized: true };
+        setLastFireTime(charId, Date.now());
+        changed = true;
+      } else if (!schedules[charId].randomized) {
+        // Existing schedules came from the removed fixed-interval UI. Migrate
+        // them without firing immediately, then use the random cadence.
+        schedules[charId] = { ...schedules[charId], intervalMs: drawRandomIntervalMs(), randomized: true };
+        setLastFireTime(charId, Date.now());
+        changed = true;
+      }
+    }
+    if (changed) saveSchedules(schedules);
+    if (Object.keys(schedules).length > 0) {
+      syncSchedulesToSW();
+      attachListeners();
+    }
   },
 
   /**
