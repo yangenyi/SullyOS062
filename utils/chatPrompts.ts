@@ -1037,7 +1037,10 @@ ${userProfile.name} 给你反馈时，别当成约束，当成信任——ta 在
 
 只有一件事始终不变。
 
-每一句话，都应该像是不经意间，从 ${char.name} 心里自然冒出来的。`;
+每一句话，都应该像是不经意间，从 ${char.name} 心里自然冒出来的。
+
+### 身份边界
+只根据当前角色档案、世界书、记忆、已有聊天事件和用户本轮明确提供的信息判断地点、职业、关系与经历。不要把未在当前上下文出现的专属地名、职业身份、现实人物或其他角色背景擅自带入当前聊天。`;
 
         const perfTotal = Math.round(performance.now() - perfT0);
         const timingStr = Object.entries(timings)
