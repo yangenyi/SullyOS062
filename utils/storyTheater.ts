@@ -200,20 +200,24 @@ export const createStoryTheaterDraft = (now: number = Date.now()): StoryTheaterE
 export const normalizeStoryTheater = (entry: StoryTheaterEntry): StoryTheaterEntry => {
     const archiveAfter = Math.round(clampNumber(entry.archiveAfter, 2, 200, 40));
     const archiveKeepRecent = Math.round(clampNumber(entry.archiveKeepRecent, 1, Math.max(1, archiveAfter - 1), Math.min(5, archiveAfter - 1)));
+    const sourceGroupId = typeof entry.sourceGroupId === 'string' && entry.sourceGroupId.trim() ? entry.sourceGroupId.trim() : undefined;
     return {
         ...entry,
         title: String(entry.title || '未命名剧情'),
         premise: String(entry.premise || ''),
         openingMode: entry.openingMode === 'assistant' ? 'assistant' : 'user',
-        mask: entry.writesToCharacterMemory ? { type: 'user' } : entry.mask?.type === 'character' && entry.mask.id
+        mask: sourceGroupId || entry.writesToCharacterMemory ? { type: 'user' } : entry.mask?.type === 'character' && entry.mask.id
             ? { type: 'character', id: entry.mask.id }
             : entry.mask?.type === 'custom' && entry.mask.id
                 ? { type: 'custom', id: entry.mask.id }
                 : { type: 'user' },
         characterIds: Array.isArray(entry.characterIds) ? entry.characterIds.filter(Boolean) : [],
-        writesToCharacterMemory: entry.writesToCharacterMemory === true,
+        sourceGroupId,
+        sourceGroupName: typeof entry.sourceGroupName === 'string' && entry.sourceGroupName.trim() ? entry.sourceGroupName.trim().slice(0, 120) : undefined,
+        // 群来源线下剧情必须让参与者保留各自可追溯的事件记忆；删除整条剧情时会按 theaterId 连带清理镜像。
+        writesToCharacterMemory: sourceGroupId ? true : entry.writesToCharacterMemory === true,
         characterMemoryDates: entry.characterMemoryDates || {},
-        carryCharacterMemory: entry.writesToCharacterMemory ? true : entry.carryCharacterMemory !== false,
+        carryCharacterMemory: sourceGroupId || entry.writesToCharacterMemory ? true : entry.carryCharacterMemory !== false,
         characterContextLimits: entry.characterContextLimits || {},
         archiveAfter,
         archiveKeepRecent,

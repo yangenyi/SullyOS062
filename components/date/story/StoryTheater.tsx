@@ -31,7 +31,7 @@ interface Props {
 type View = 'list' | 'editor' | 'session' | 'preset' | 'masks' | 'vectors';
 
 const StoryTheaterContent: React.FC<Props> = ({ onSwitchCompanion, onClose }) => {
-    const { characters, userProfile, addToast, remoteVectorConfig } = useOS();
+    const { characters, groups, userProfile, addToast, remoteVectorConfig } = useOS();
     const [view, setView] = useState<View>('list');
     const [entries, setEntries] = useState<StoryTheaterEntry[]>([]);
     const [customPresets, setCustomPresets] = useState<StoryTheaterPreset[]>([]);
@@ -41,6 +41,7 @@ const StoryTheaterContent: React.FC<Props> = ({ onSwitchCompanion, onClose }) =>
     const [maskLocked, setMaskLocked] = useState(false);
     const [deletingEntry, setDeletingEntry] = useState<StoryTheaterEntry | null>(null);
     const [deletingStory, setDeletingStory] = useState(false);
+    const [showGroupPicker, setShowGroupPicker] = useState(false);
     const importInput = useRef<HTMLInputElement>(null);
     const presets = useMemo(() => withBuiltInStoryPresets(customPresets), [customPresets]);
 
@@ -178,6 +179,36 @@ const StoryTheaterContent: React.FC<Props> = ({ onSwitchCompanion, onClose }) =>
         setView('editor');
     }, []);
 
+    const createStoryFromGroup = useCallback((group: any) => {
+        const characterIds = (Array.isArray(group?.members) ? group.members : [])
+            .filter((id: unknown): id is string => typeof id === 'string' && characters.some(character => character.id === id));
+        if (characterIds.length === 0) {
+            addToast('这个群没有可用于剧情的现存角色', 'info');
+            return;
+        }
+        const groupName = String(group?.name || '群聊').trim() || '群聊';
+        const now = Date.now();
+        setMaskLocked(false);
+        setActiveEntry({
+            ...createStoryTheaterDraft(now),
+            title: `${groupName} · 线下剧情`,
+            premise: `承接「${groupName}」群聊中已经发生的公开事件，成员在线下继续行动。群聊后续的新消息会在每次推进时作为只读连续性背景参与本剧情；本剧情正文不会回写进群聊或普通私聊。`,
+            openingMode: 'assistant',
+            characterIds,
+            // 群来源剧情既独立存档，也要让每位参与角色保留可追溯的事件记忆。
+            writesToCharacterMemory: true,
+            carryCharacterMemory: true,
+            sourceGroupId: String(group.id),
+            sourceGroupName: groupName,
+            selectedWorldbookIds: dedupeTheaterWorldbooks(characters.filter(character => characterIds.includes(character.id))).map(book => book.id),
+            characterMemoryDates: Object.fromEntries(characterIds.map(id => [id, new Date(now - new Date(now).getTimezoneOffset() * 60_000).toISOString().slice(0, 16)])),
+            characterContextLimits: Object.fromEntries(characterIds.map(id => [id, 100])),
+            presetId: presets[0]?.id,
+        });
+        setShowGroupPicker(false);
+        setView('editor');
+    }, [addToast, characters, presets]);
+
     if (view === 'preset' && editingPreset) return <StoryPresetMaker key={editingPreset.id}
         preset={editingPreset}
         onBack={() => setView(activeEntry ? 'editor' : 'list')}
@@ -226,7 +257,8 @@ const StoryTheaterContent: React.FC<Props> = ({ onSwitchCompanion, onClose }) =>
                 <button onClick={onClose} className='w-9 h-9 rounded-full grid place-items-center'><ArrowLeft size={20} /></button>
                 <div><div className='text-[9px] uppercase tracking-[.24em] font-bold text-violet-500'>Meet</div><h1 className='font-semibold'>见面</h1></div>
                 <StoryAppearanceButton className='ml-auto bg-white border border-slate-200' />
-                <button onClick={() => { setMaskLocked(false); setActiveEntry({ ...createStoryTheaterDraft(), presetId: presets[0]?.id }); setView('editor'); }} className='w-10 h-10 rounded-full bg-slate-900 text-white grid place-items-center'><Plus size={19} /></button>
+                <button onClick={() => setShowGroupPicker(true)} className='w-10 h-10 rounded-full bg-white border border-slate-200 text-violet-600 grid place-items-center' title='从群聊创建剧情' aria-label='从群聊创建剧情'><UsersThree size={19} /></button>
+                <button onClick={() => { setMaskLocked(false); setActiveEntry({ ...createStoryTheaterDraft(), presetId: presets[0]?.id }); setView('editor'); }} className='w-10 h-10 rounded-full bg-slate-900 text-white grid place-items-center' title='新增剧情' aria-label='新增剧情'><Plus size={19} /></button>
             </div>
             <div className='mx-5 mb-4 grid grid-cols-2 p-1 rounded-xl bg-slate-200'>
                 <button onClick={onSwitchCompanion} className='py-2 rounded-lg text-xs font-bold text-slate-500'>陪伴</button>
@@ -242,7 +274,7 @@ const StoryTheaterContent: React.FC<Props> = ({ onSwitchCompanion, onClose }) =>
                 </section>
 
                 <section className='py-6'>
-                    {entries.length === 0 ? <button onClick={() => { setMaskLocked(false); setActiveEntry({ ...createStoryTheaterDraft(), presetId: presets[0]?.id }); setView('editor'); }} className='w-full py-14 rounded-3xl border border-dashed border-slate-300 text-center'><span className='block text-sm font-semibold'>新增第一条剧情</span><span className='block mt-2 text-[10px] text-slate-400'>选择多位角色、记忆方式、世界书与原生预设</span></button> : <div className='divide-y divide-slate-200'>{entries.map(item => {
+                    {entries.length === 0 ? <div className='grid grid-cols-2 gap-3'><button onClick={() => { setMaskLocked(false); setActiveEntry({ ...createStoryTheaterDraft(), presetId: presets[0]?.id }); setView('editor'); }} className='py-14 rounded-3xl border border-dashed border-slate-300 text-center'><span className='block text-sm font-semibold'>新增第一条剧情</span><span className='block mt-2 text-[10px] text-slate-400'>选择角色与预设</span></button><button onClick={() => setShowGroupPicker(true)} className='py-14 rounded-3xl border border-dashed border-violet-300 bg-violet-50 text-center'><UsersThree size={24} className='mx-auto text-violet-600' /><span className='block mt-3 text-sm font-semibold text-violet-800'>承接群聊剧情</span><span className='block mt-2 text-[10px] text-violet-500'>锁定群成员与共同事件</span></button></div> : <div className='divide-y divide-slate-200'>{entries.map(item => {
                         const cast = characters.filter(char => item.characterIds.includes(char.id));
                         const mask = resolveStoryTheaterMask(item.mask, userProfile, characters, masks);
                         const youLabel = mask.selection.type === 'user' ? '你' : `你（${mask.name}）`;
@@ -268,6 +300,22 @@ const StoryTheaterContent: React.FC<Props> = ({ onSwitchCompanion, onClose }) =>
                 </section>
             </div>
         </main>
+        {showGroupPicker && <div className='fixed inset-0 z-[95] flex items-end justify-center overflow-y-auto overscroll-contain bg-slate-950/35' onClick={() => setShowGroupPicker(false)} role='presentation'>
+            <div className='story-safe-sheet w-full sm:max-w-sm rounded-t-[28px] bg-stone-100 px-5 pt-5 shadow-2xl' onClick={event => event.stopPropagation()} role='dialog' aria-modal='true' aria-labelledby='group-story-title'>
+                <div className='flex items-start gap-4'><div className='min-w-0 flex-1'><div className='text-[9px] uppercase tracking-[.2em] font-bold text-violet-500'>Group continuity</div><h2 id='group-story-title' className='mt-1 text-lg font-semibold'>从哪个群聊开始？</h2><p className='mt-2 text-[10px] leading-5 text-slate-500'>会创建独立剧情线程，并在每次推进时读取该群最近公开消息。</p></div><button onClick={() => setShowGroupPicker(false)} className='w-9 h-9 shrink-0 rounded-full bg-white border border-slate-200 grid place-items-center text-slate-400' aria-label='关闭群聊选择'><X size={16} /></button></div>
+                <div className='mt-5 max-h-[52vh] overflow-y-auto divide-y divide-slate-200'>
+                    {groups.length === 0 ? <p className='py-8 text-center text-xs text-slate-400'>还没有可选的群聊</p> : groups.map(group => {
+                        const memberNames = (Array.isArray((group as any).members) ? (group as any).members : [])
+                            .map((id: string) => characters.find(character => character.id === id)?.name)
+                            .filter(Boolean);
+                        return <button key={group.id} onClick={() => createStoryFromGroup(group)} className='w-full py-4 flex items-center gap-3 text-left'>
+                            {group.avatar ? <img src={group.avatar} alt='' className='w-10 h-10 rounded-full object-cover' /> : <span className='w-10 h-10 rounded-full bg-violet-100 text-violet-600 grid place-items-center'><UsersThree size={18} /></span>}
+                            <span className='min-w-0 flex-1'><strong className='block truncate text-sm text-slate-700'>{group.name || '未命名群聊'}</strong><span className='block mt-1 truncate text-[10px] text-slate-400'>{memberNames.join('、') || '没有可用成员'}</span></span>
+                        </button>;
+                    })}
+                </div>
+            </div>
+        </div>}
         {deletingEntry && <div className='fixed inset-0 z-[95] flex items-end justify-center overflow-y-auto overscroll-contain bg-slate-950/35' onClick={() => !deletingStory && setDeletingEntry(null)} role='presentation'>
             <div className='story-safe-sheet w-full sm:max-w-sm rounded-t-[28px] bg-stone-100 px-5 pt-5 shadow-2xl' onClick={event => event.stopPropagation()} role='dialog' aria-modal='true' aria-labelledby='delete-story-title'>
                 <div className='flex items-start gap-4'><div className='min-w-0 flex-1'><div className='text-[9px] uppercase tracking-[.2em] font-bold text-rose-500'>Delete theater</div><h2 id='delete-story-title' className='mt-1 text-lg font-semibold'>删除整个剧情？</h2></div><button disabled={deletingStory} onClick={() => setDeletingEntry(null)} className='w-9 h-9 shrink-0 rounded-full bg-white border border-slate-200 grid place-items-center text-slate-400 disabled:opacity-30' aria-label='关闭删除确认'><X size={16} /></button></div>

@@ -2118,6 +2118,10 @@ export interface StoryTheaterEntry {
     /** 本剧情中用户执笔的身份；缺省时使用真实用户档案。 */
     mask?: StoryTheaterMaskSelection;
     characterIds: string[];
+    /** 来源群聊。存在时，剧情每轮读取该群近期公开记录以保持群聊与线下剧情连贯。 */
+    sourceGroupId?: string;
+    /** 创建时的群名称快照；群被改名或删除后仍用于提示来源。 */
+    sourceGroupName?: string;
     /** true=像【陪伴】一样，把第三人称正文分别写入每个角色的正常记忆流。 */
     writesToCharacterMemory: boolean;
     /** 每位演员各自的剧情时间锚点（datetime-local 字符串），允许跨时区/跨世界线。 */

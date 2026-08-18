@@ -55,6 +55,7 @@ import { incrementDigestRound, runCognitiveDigestion } from '../../../utils/memo
 import StoryQuickPresetPanel from './StoryQuickPresetPanel';
 import { StoryAppearanceButton } from './StoryTheaterTheme';
 import { shareOrDownloadFile } from '../../../utils/shareExport';
+import { messageLogText } from '../../../utils/groupChat/format';
 
 interface Props {
     entry: StoryTheaterEntry;
@@ -518,6 +519,35 @@ const StoryTheaterSession: React.FC<Props> = ({ entry, preset, masks, onBack, on
         return blocks.join('\n\n---\n\n');
     }, [actors, entry.carryCharacterMemory, entry.characterContextLimits, mask.name, memoryPalaceConfig.embedding, remoteVectorConfig, userProfile]);
 
+    const buildGroupContinuityContext = useCallback(async (): Promise<string> => {
+        if (!entry.sourceGroupId) return '';
+        try {
+            const { messages: groupMessages } = await DB.getRecentGroupMessagesWithCount(entry.sourceGroupId, 30);
+            const sourceName = entry.sourceGroupName || '来源群聊';
+            const memberNames = actors.map(actor => actor.name).filter(Boolean);
+            const rows = groupMessages.map(message => {
+                const speaker = message.role === 'user'
+                    ? mask.name
+                    : characters.find(character => character.id === message.charId)?.name || '群成员';
+                const time = new Date(message.timestamp);
+                const timeLabel = Number.isFinite(time.getTime())
+                    ? `${String(time.getMonth() + 1).padStart(2, '0')}-${String(time.getDate()).padStart(2, '0')} ${String(time.getHours()).padStart(2, '0')}:${String(time.getMinutes()).padStart(2, '0')}`
+                    : '未知时间';
+                return `[${timeLabel}] ${speaker}：${messageLogText(message) || '[空消息]'}`;
+            });
+            return [
+                `### 群聊连续性上下文（只读）`,
+                `来源群：${sourceName}`,
+                memberNames.length > 0 ? `本剧情锁定成员：${memberNames.join('、')}` : '',
+                '以下是该群最近公开消息。它们可以影响本轮线下剧情的动机、关系和后续事件；不要把未发生的群聊内容当成事实，也不要把本剧情正文伪装成群消息。剧情正文保留在独立线程，并作为可追溯镜像写入参与角色各自的记忆流。',
+                rows.length > 0 ? rows.join('\n') : '该群暂无可读取的近期消息；按已有剧情自然继续。',
+            ].filter(Boolean).join('\n');
+        } catch (error) {
+            console.warn('[StoryTheater] group continuity context unavailable', error);
+            return '';
+        }
+    }, [actors, characters, entry.sourceGroupId, entry.sourceGroupName, mask.name]);
+
     const buildMaskMemoryContext = useCallback(async (query: string): Promise<string> => {
         if (!entry.carryCharacterMemory || !mask.characterId) return '';
         const maskCharacter = characters.find(char => char.id === mask.characterId);
@@ -676,16 +706,18 @@ const StoryTheaterSession: React.FC<Props> = ({ entry, preset, masks, onBack, on
                 .sort((a, b) => a.id - b.id);
             const history = current.filter(message => message.id !== userMessageId && message.id !== rerollTarget?.id);
             const visibleHistory = history.filter(message => !mirrorArchived(message, promptEntry));
-            const [actorContext, maskMemoryContext, vectorRecall] = await Promise.all([
+            const [actorContext, maskMemoryContext, vectorRecall, groupContinuityContext] = await Promise.all([
                 buildActorContexts(text),
                 buildMaskMemoryContext(text),
                 independentRecall(text, visibleHistory.slice(-8), promptEntry),
+                buildGroupContinuityContext(),
             ]);
             const summaries = promptEntry.archives.filter(archive => archive.summary).map((archive, index) => `事件盒 ${index + 1}：${archive.summary}`).join('\n\n');
             const scenario = [
                 `### 当前剧情\n标题：${entry.title}\n前提：${entry.premise || '沿用已经发生的正文自然继续。'}`,
                 summaries ? `### 常驻事件盒\n${summaries}` : '',
                 vectorRecall ? buildStoryArchiveMemoryEnvelope(vectorRecall) : '',
+                groupContinuityContext,
             ].filter(Boolean).join('\n\n');
             const worldbookScanMessages = buildStoryWorldbookScanMessages(
                 visibleHistory.map(message => ({ role: message.role, content: message.content })),
@@ -766,7 +798,7 @@ const StoryTheaterSession: React.FC<Props> = ({ entry, preset, masks, onBack, on
             setSending(false);
             setRerollingId(null);
         }
-    }, [actors, addToast, affinityDrafts, affinityEnabled, applyActorMemoryPipeline, archiveIfNeeded, buildActorContexts, buildMaskMemoryContext, callCompletion, effectivePreset, entry, independentRecall, input, loadMessages, mask, promptIdentityName, saveCentralAndMirrors, selectedBooks, threadId]);
+    }, [actors, addToast, affinityDrafts, affinityEnabled, applyActorMemoryPipeline, archiveIfNeeded, buildActorContexts, buildGroupContinuityContext, buildMaskMemoryContext, callCompletion, effectivePreset, entry, independentRecall, input, loadMessages, mask, promptIdentityName, saveCentralAndMirrors, selectedBooks, threadId]);
 
     const archivedCount = messages.filter(message => mirrorArchived(message, entry)).length;
     const pendingRetryInput = getPendingStoryRetryInput(messages);
