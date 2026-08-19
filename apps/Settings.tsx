@@ -2309,6 +2309,7 @@ const Settings: React.FC = () => {
                             </div>
                         )}
                     </div>
+                </div>
 
 
                 {/* 简化时间感知开关 */}
