@@ -617,7 +617,16 @@ ${charContexts}
                               }
                             };
                         } else {
-                            fetchUrl = fetchUrl.endsWith('/images/generations') ? fetchUrl : `${fetchUrl.replace(/\/+$/, '')}/v1/images/generations`;
+                            // OpenAI 式生图端点归一化：用户常把地址填成带 /v1 的基址（如 https://x/v1），
+                            // 旧逻辑无脑补 /v1/images/generations 会拼成 .../v1/v1/... 404。
+                            // 这里先剥掉结尾斜杠与可能已存在的 /v1、/images/generations，再统一补规范路径。
+                            if (!fetchUrl.endsWith('/images/generations')) {
+                                fetchUrl = fetchUrl
+                                    .replace(/\/+$/, '')
+                                    .replace(/\/v1$/, '')
+                                    .replace(/\/+$/, '');
+                                fetchUrl = `${fetchUrl}/v1/images/generations`;
+                            }
                             if (imgGenApi.imageGenKey) imgHeaders['Authorization'] = `Bearer ${imgGenApi.imageGenKey}`;
                             imgBody = {
                               prompt: finalPrompt,
