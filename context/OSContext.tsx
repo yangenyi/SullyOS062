@@ -377,6 +377,10 @@ interface OSContextType {
   showError: (title: string, details: string) => void;
   dismissError: () => void;
 
+  // 角色反查提醒弹窗：后台角色偷看用户聊天/论坛内容时居中弹窗提示。
+  auditNotice: { charName: string; kind: 'chat' | 'forum'; detail: string } | null;
+  dismissAuditNotice: () => void;
+
   // Icons
   customIcons: Record<string, string>;
   setCustomIcon: (appId: string, iconUrl: string | undefined) => Promise<void>;
@@ -894,6 +898,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const [appearancePresets, setAppearancePresets] = useState<AppearancePreset[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [errorDialog, setErrorDialog] = useState<{ title: string; details: string } | null>(null);
+  // 角色反查提醒弹窗：后台角色偷看了用户的聊天/论坛内容时，居中弹一个提示。
+  const [auditNotice, setAuditNotice] = useState<{ charName: string; kind: 'chat' | 'forum'; detail: string } | null>(null);
   
   const [lastMsgTimestamp, setLastMsgTimestamp] = useState<number>(0);
   const [unreadMessages, setUnreadMessages] = useState<Record<string, number>>({});
@@ -2180,9 +2186,11 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
                       if (isTalkingToOtherRecently && Math.random() < 0.5) {
                           // 吃醋/好奇反查
                           auditHint = `\n[角色反查发现: 你刚刚在后台偷偷看了一下用户的活动记录，发现 TA 在 ${lastOtherCharDiffMin} 分钟前还在和「${lastOtherCharName}」聊天。而 TA 已经 ${timeSinceUser || '挺久'} 没理你了。你心里肯定很不服气、酸溜溜的、或者想暗戳戳地刺 TA 几句。请在这次主动发去的消息中自然地体现出这一“醋意”或“打听行为”，但要符合你的人设（可以傲娇、可以直球质问、也可以暗示范指）。]`;
+                          setAuditNotice({ charName: char.name, kind: 'chat', detail: `TA 发现你 ${lastOtherCharDiffMin} 分钟前还在和「${lastOtherCharName}」聊天，可能要来找你了…` });
                       } else if (hasRecentPost) {
                           // 论坛帖子话题反查
                           auditHint = `\n[角色反查发现: 你刚刚在 Spark 论坛上看到了用户最近发布的一篇笔记帖子，标题是《${latestUserPost.title || '无题'}》，内容是：“${latestUserPost.content || ''}”（贴纸编码: ${latestUserPost.images?.[0] || '无'}）。你觉得这个帖子主题蛮有意思，决定主动以此为契机找 TA 聊天。请在接下来发送的私聊消息里，自然地提起或调侃这篇论坛笔记帖子。]`;
+                          setAuditNotice({ charName: char.name, kind: 'forum', detail: `TA 刷到了你在 Spark 论坛发的《${latestUserPost.title || '无题'}》，准备以此为话题来找你…` });
                       }
                   } catch (e) {
                       console.warn('[Proactive/Audit] 角色反查执行失败:', e);
@@ -4937,6 +4945,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     setSuspendedCall(null);
   };
 
+  const dismissAuditNotice = () => setAuditNotice(null);
+
   // --- Back Handler Logic ---
   const registerBackHandler = useCallback((handler: () => boolean) => {
       backHandlerRef.current = handler;
@@ -5026,6 +5036,8 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
     errorDialog,
     showError,
     dismissError,
+    auditNotice,
+    dismissAuditNotice,
     customIcons,
     setCustomIcon,
     resetAppearance,

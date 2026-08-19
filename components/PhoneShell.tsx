@@ -111,6 +111,7 @@ import GlobalMiniPlayer from './os/GlobalMiniPlayer';
 import PersonaSimIndicator from './os/PersonaSimIndicator';
 import DreamSimIndicator from './os/DreamSimIndicator';
 import ErrorDialog from './os/ErrorDialog';
+import AuditNoticeDialog from './os/AuditNoticeDialog';
 import BootSequence from './os/BootSequence';
 import { setAppPayloadWarmer, shouldUseIdleAppPreload } from './os/appPreload';
 import { isBrowserBackGuardState, makeBrowserBackGuardState } from '../utils/browserBackGuard';
@@ -445,7 +446,7 @@ const AppLoadingFallback: React.FC<{ onReturn?: () => void; animationEnabled?: b
 };
 
 const PhoneShell: React.FC = () => {
-  const { theme, isLocked, unlock, activeApp, closeApp, openApp, virtualTime, isDataLoaded, toasts, unreadMessages, characters, handleBack, suspendedCall, resumeCall, activeCharacterId, errorDialog, dismissError } = useOS();
+  const { theme, isLocked, unlock, activeApp, closeApp, openApp, virtualTime, isDataLoaded, toasts, unreadMessages, characters, handleBack, suspendedCall, resumeCall, activeCharacterId, errorDialog, dismissError, auditNotice, dismissAuditNotice } = useOS();
   const useIOSStandaloneLayout = isIOSStandaloneWebApp();
 
   // 三档顶部状态栏：安全显示 / 紧凑显示 / 隐藏。旧存档仍由 hideStatusBar 兼容解析。
@@ -1063,6 +1064,9 @@ const PhoneShell: React.FC = () => {
          details={errorDialog?.details ?? ''}
          onClose={dismissError}
        />
+
+       {/* 角色反查提醒弹窗：后台角色偷看用户聊天/论坛内容时居中弹窗 */}
+       <AuditNoticeDialog notice={auditNotice} onClose={dismissAuditNotice} />
 
        {/* First-time disclaimer popup */}
        {showDisclaimer && <DisclaimerPopup onAccept={handleAcceptDisclaimer} />}
