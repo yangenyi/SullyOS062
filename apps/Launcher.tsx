@@ -6,7 +6,6 @@ import AppIcon from '../components/os/AppIcon';
 import { DB } from '../utils/db';
 import { CharacterProfile, Anniversary, AppID, DailySchedule } from '../types';
 import { ScheduleHomeWidget, ScheduleFullscreenViewer } from '../components/schedule/ScheduleHomeWidget';
-import NowPlayingSquareWidget from '../components/os/NowPlayingSquareWidget';
 import MobileGameHome from '../components/os/MobileGameHome';
 import TamagotchiHome from '../components/os/TamagotchiHome';
 import { getDailyScheduleForChar } from '../utils/dailySchedule';
@@ -533,10 +532,11 @@ const Launcher: React.FC = () => {
   const availableGridIds = useMemo(() => availableGridApps.map(app => app.id), [availableGridApps]);
   const [launcherAppOrder, setLauncherAppOrder] = useState<string[]>(() => normalizeOrder(theme.launcherAppOrder, INSTALLED_APPS.filter(app => !DOCK_APPS.includes(app.id)).map(app => app.id)));
   const [launcherDockOrder, setLauncherDockOrder] = useState<string[]>(() => normalizeOrder(theme.launcherDockOrder, DOCK_APPS));
-  const [pinwheelOrder, setPinwheelOrder] = useState<Array<'music' | 'appsA' | 'appsB' | 'image'>>(() => {
-      const available = ['music', 'appsA', 'appsB', 'image'] as const;
-      const saved = theme.launcherPinwheelOrder || [];
-      return [...saved.filter((id, index) => available.includes(id) && saved.indexOf(id) === index), ...available.filter(id => !saved.includes(id))];
+  const [pinwheelOrder, setPinwheelOrder] = useState<Array<'appsA' | 'appsB' | 'image'>>(() => {
+      // 音乐播放器格已从桌面移除；'music' 若残留在旧的保存顺序里会被过滤掉。
+      const available = ['appsA', 'appsB', 'image'] as const;
+      const saved = (theme.launcherPinwheelOrder || []) as Array<'appsA' | 'appsB' | 'image'>;
+      return [...saved.filter((id, index) => available.includes(id as any) && saved.indexOf(id) === index), ...available.filter(id => !saved.includes(id))];
   });
   const launcherAppOrderRef = useRef(launcherAppOrder);
   const launcherDockOrderRef = useRef(launcherDockOrder);
@@ -560,9 +560,9 @@ const Launcher: React.FC = () => {
   }, [layoutEditing, normalizeOrder, theme.launcherDockOrder]);
   useEffect(() => {
       if (layoutEditing) return;
-      const available = ['music', 'appsA', 'appsB', 'image'] as const;
-      const saved = theme.launcherPinwheelOrder || [];
-      const next = [...saved.filter((id, index) => available.includes(id) && saved.indexOf(id) === index), ...available.filter(id => !saved.includes(id))];
+      const available = ['appsA', 'appsB', 'image'] as const;
+      const saved = (theme.launcherPinwheelOrder || []) as Array<'appsA' | 'appsB' | 'image'>;
+      const next = [...saved.filter((id, index) => available.includes(id as any) && saved.indexOf(id) === index), ...available.filter(id => !saved.includes(id))];
       pinwheelOrderRef.current = next;
       setPinwheelOrder(next);
   }, [layoutEditing, theme.launcherPinwheelOrder]);
@@ -578,17 +578,23 @@ const Launcher: React.FC = () => {
   }, [launcherDockOrder]);
 
   // Split apps into pages of 8 (4 cols x 2 rows fit comfortably below widget)
-  // Pages: 0 = clock+chat+music+grid (original), 1 = pinwheel, 2 = widget images + grid,
-  //        3+ = plain grid. Pad to at least 3 slots so the pinwheel/widget pages always exist.
+  // Pages: 0 = clock+chat+grid (original), 1 = pinwheel, 2 = widget images + grid,
+  //        3+ = plain grid. 至少保证主页 + 风车页存在（2 页）；第 3 页（widget 装饰图页）
+  //        只在用户确实配了桌面装饰图时才生成，否则不再强行补出一张空白页。
   const APPS_PER_PAGE = 8;
+  const hasWidgetImages = useMemo(() => {
+      const w = theme.launcherWidgets || {};
+      return !!(w['tl'] || w['tr'] || w['wide']);
+  }, [theme.launcherWidgets]);
   const appPages = useMemo(() => {
       const pages: typeof INSTALLED_APPS[] = [];
       for (let i = 0; i < gridApps.length; i += APPS_PER_PAGE) {
           pages.push(gridApps.slice(i, i + APPS_PER_PAGE));
       }
-      while (pages.length < 3) pages.push([]);
+      const minPages = hasWidgetImages ? 3 : 2;
+      while (pages.length < minPages) pages.push([]);
       return pages;
-  }, [gridApps]);
+  }, [gridApps, hasWidgetImages]);
 
   // Page 2 (pinwheel) uses appPages[1]: split into two 2x2 quads
   const page2Apps = appPages[1] || [];
@@ -743,7 +749,7 @@ const Launcher: React.FC = () => {
           launcherDockOrderRef.current = next;
           setLauncherDockOrder(next);
       } else if (kind === 'widget') {
-          const next = reorder(pinwheelOrderRef.current) as Array<'music' | 'appsA' | 'appsB' | 'image'>;
+          const next = reorder(pinwheelOrderRef.current) as Array<'appsA' | 'appsB' | 'image'>;
           pinwheelOrderRef.current = next;
           setPinwheelOrder(next);
       }
@@ -1061,9 +1067,7 @@ const Launcher: React.FC = () => {
                                       data-launcher-kind="widget"
                                       className={`aspect-square min-w-0 ${layoutEditing ? 'launcher-edit-item' : ''}`}
                                   >
-                                      {cell === 'music' ? (
-                                          <NowPlayingSquareWidget contentColor={contentColor} />
-                                      ) : cell === 'appsA' ? (
+                                      {cell === 'appsA' ? (
                                           <AppQuadGrid apps={page2QuadA} openApp={openApp} editing={layoutEditing} />
                                       ) : cell === 'appsB' ? (
                                           <AppQuadGrid apps={page2QuadB} openApp={openApp} editing={layoutEditing} />
