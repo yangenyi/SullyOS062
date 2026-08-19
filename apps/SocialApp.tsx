@@ -547,13 +547,21 @@ ${charContexts}
   },
   ...
 ]`;
-            const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
-                body: JSON.stringify({ model: apiConfig.model, messages: [{ role: "user", content: prompt }], temperature: 0.95, max_tokens: 8000 }),
-                signal: controller.signal,
-                __sullyMeta: { appId: 'social', appName: 'Spark', purpose: '刷新推荐流' },
-            } as RequestInit);
+            // 刷新推荐流加 60s 超时（生成 6-8 条帖子，比评论稍宽松），避免中转慢时无限转圈
+            let refreshTimedOut = false;
+            const refreshTimeout = setTimeout(() => { refreshTimedOut = true; controller.abort(); }, 60000);
+            let response: Response;
+            try {
+                response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
+                    body: JSON.stringify({ model: apiConfig.model, messages: [{ role: "user", content: prompt }], temperature: 0.95, max_tokens: 4000 }),
+                    signal: controller.signal,
+                    __sullyMeta: { appId: 'social', appName: 'Spark', purpose: '刷新推荐流' },
+                } as RequestInit);
+            } finally {
+                clearTimeout(refreshTimeout);
+            }
             if (!response.ok) throw new Error(await apiErrorMessage(response));
             const data = await safeResponseJson(response);
             if (controller.signal.aborted) return;
@@ -707,7 +715,8 @@ ${charContexts}
             prependPostsToFeed(newPosts);
             addToast('首页已刷新: 冲浪模式开启', 'success');
         } catch (e: any) {
-            if (e?.name !== 'AbortError') addToast('刷新失败: ' + e.message, 'error');
+            if (refreshTimedOut) addToast('刷新超时（60秒），可能是中转较慢或选用模型较慢，请稍后重试', 'error');
+            else if (e?.name !== 'AbortError') addToast('刷新失败: ' + e.message, 'error');
         } finally {
             if (refreshRequestRef.current === controller) {
                 refreshRequestRef.current = null;
