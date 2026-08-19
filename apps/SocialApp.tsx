@@ -458,6 +458,75 @@ const SocialApp: React.FC = () => {
         return apiConfig.imageGenEnabled === true;
     };
 
+    // 后台为单条帖子生成配图：成功后只更新这一条帖子的 images，不阻塞其它帖子。
+    // 帖子文字刷出来后再慢慢补图，避免"等所有图都画完才一起显示"的长时间空白。
+    const runPostImageGen = async (postId: string, content: string) => {
+        if (!isImageGenEnabled() || !content) return;
+        try {
+            const imgGenApi = apiConfig as any;
+            const isSdWebui = imgGenApi.imageGenUrl?.includes('/sdapi/v1');
+            const isNovelAi = imgGenApi.imageGenUrl?.includes('/generate') || imgGenApi.imageGenUrl?.includes('/novelai');
+            let fetchUrl = imgGenApi.imageGenUrl || '';
+            let imgHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+            let imgBody: any = {};
+
+            const finalPrompt = `${content.slice(0, 150)}, ${imgGenApi.imageGenPrompt || ''}, ${imgGenApi.imageGenFaceLock || ''}`.trim().replace(/,\s*,/g, ',').replace(/,\s*$/, '');
+            const finalNegativePrompt = imgGenApi.imageGenNegativePrompt || 'nsfw, low quality, bad anatomy, deformed';
+
+            if (isSdWebui) {
+                fetchUrl = fetchUrl.endsWith('/txt2img') ? fetchUrl : `${fetchUrl.replace(/\/+$/, '')}/txt2img`;
+                if (imgGenApi.imageGenKey) imgHeaders['Authorization'] = `Bearer ${imgGenApi.imageGenKey}`;
+                imgBody = { prompt: finalPrompt, negative_prompt: finalNegativePrompt, steps: 20, width: 512, height: 512, batch_size: 1 };
+            } else if (isNovelAi) {
+                if (imgGenApi.imageGenKey) imgHeaders['Authorization'] = `Bearer ${imgGenApi.imageGenKey}`;
+                imgBody = { input: finalPrompt, model: 'safe-diffusion', parameters: { width: 512, height: 512, negative_prompt: finalNegativePrompt } };
+            } else {
+                // OpenAI 式生图端点归一化：用户常把地址填成带 /v1 的基址（如 https://x/v1），
+                // 旧逻辑无脑补 /v1/images/generations 会拼成 .../v1/v1/... 404。
+                if (!fetchUrl.endsWith('/images/generations')) {
+                    fetchUrl = fetchUrl.replace(/\/+$/, '').replace(/\/v1$/, '').replace(/\/+$/, '');
+                    fetchUrl = `${fetchUrl}/v1/images/generations`;
+                }
+                if (imgGenApi.imageGenKey) imgHeaders['Authorization'] = `Bearer ${imgGenApi.imageGenKey}`;
+                imgBody = { prompt: finalPrompt, n: 1, size: '512x512', response_format: 'b64_json' };
+            }
+
+            const res = await fetch(fetchUrl, { method: 'POST', headers: imgHeaders, body: JSON.stringify(imgBody) });
+            if (!res.ok) return;
+            const resData = await res.json();
+            let base64Data = '';
+            if (resData.data?.[0]?.b64_json) {
+                base64Data = resData.data[0].b64_json;
+            } else if (resData.data?.[0]?.url) {
+                const imgRes = await fetch(resData.data[0].url);
+                if (imgRes.ok) {
+                    const imgBlob = await imgRes.blob();
+                    const refUrl = await putImageBlob(imgBlob);
+                    if (mountedRef.current) updatePostInFeed(postId, cur => ({ ...cur, images: [refUrl] }));
+                }
+                return;
+            } else if (resData.images?.[0]) {
+                base64Data = resData.images[0];
+            } else if (resData.image) {
+                base64Data = resData.image;
+            }
+
+            if (base64Data) {
+                const mimeType = base64Data.startsWith('data:') ? (base64Data.match(/^data:([^;]+)/)?.[1] || 'image/png') : 'image/png';
+                const pureBase64 = base64Data.startsWith('data:') ? base64Data.split(',')[1] : base64Data;
+                const binary = atob(pureBase64);
+                const len = binary.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+                const imgBlob = new Blob([bytes], { type: mimeType });
+                const refUrl = await putImageBlob(imgBlob);
+                if (mountedRef.current) updatePostInFeed(postId, cur => ({ ...cur, images: [refUrl] }));
+            }
+        } catch (err) {
+            console.error('Forum ImageGen failed:', err);
+        }
+    };
+
     // --- AI Logic (Updated for Multi-Handle & Image Interception) ---
     const handleRefresh = async () => {
         if (!apiConfig.apiKey) { addToast('请配置 API Key', 'error'); return; }
@@ -568,13 +637,14 @@ ${charContexts}
             const json = safeParseJSON(data.choices[0].message.content);
             if (!Array.isArray(json)) throw new Error('Parsed data is not an array');
             
-            const newPosts: SocialPost[] = await Promise.all(json
-                .filter((item: any) => {
-                    // Defense in depth: drop any AI-generated post that tries to impersonate the user.
-                    const name = (item?.authorName || '').toString().trim();
-                    return name && name !== socialProfile.name;
-                })
-                .map(async (item: any) => {
+            const validItems = json.filter((item: any) => {
+                // Defense in depth: drop any AI-generated post that tries to impersonate the user.
+                const name = (item?.authorName || '').toString().trim();
+                return name && name !== socialProfile.name;
+            });
+
+            // 先同步构建帖子（用 emoji 占位），立刻显示；配图放到后台逐条补，不阻塞刷新。
+            const newPosts: SocialPost[] = validItems.map((item: any, idx: number) => {
                 let avatar = `https://api.dicebear.com/7.x/notionists/svg?seed=${item.authorName}`;
                 let matchedChar: CharacterProfile | undefined;
                 if (item.isCharacter) {
@@ -593,109 +663,10 @@ ${charContexts}
                 }
                 // Normalize emoji content. AI usually returns real emoji chars; fall back to a ✨ char (not codepoint) for safety.
                 const rawEmojis = Array.isArray(item.emojis) && item.emojis.length > 0 ? item.emojis : ['✨'];
-                let images = rawEmojis.map((e: any) => codepointToEmoji(String(e ?? '✨')));
-
-                // 引入全局生图拦截，使得论坛推荐流文案能自动触发画图并显示
-                if (isImageGenEnabled() && item.content) {
-                    try {
-                        const imgGenApi = apiConfig as any;
-                        const isSdWebui = imgGenApi.imageGenUrl?.includes('/sdapi/v1');
-                        const isNovelAi = imgGenApi.imageGenUrl?.includes('/generate') || imgGenApi.imageGenUrl?.includes('/novelai');
-                        let fetchUrl = imgGenApi.imageGenUrl || '';
-                        let imgHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-                        let imgBody: any = {};
-
-                        // 采用帖子正文作为画图指令
-                        const finalPrompt = `${item.content.slice(0, 150)}, ${imgGenApi.imageGenPrompt || ''}, ${imgGenApi.imageGenFaceLock || ''}`.trim().replace(/,\s*,/g, ',').replace(/,\s*$/, '');
-                        const finalNegativePrompt = imgGenApi.imageGenNegativePrompt || 'nsfw, low quality, bad anatomy, deformed';
-
-                        if (isSdWebui) {
-                            fetchUrl = fetchUrl.endsWith('/txt2img') ? fetchUrl : `${fetchUrl.replace(/\/+$/, '')}/txt2img`;
-                            if (imgGenApi.imageGenKey) imgHeaders['Authorization'] = `Bearer ${imgGenApi.imageGenKey}`;
-                            imgBody = {
-                              prompt: finalPrompt,
-                              negative_prompt: finalNegativePrompt,
-                              steps: 20,
-                              width: 512,
-                              height: 512,
-                              batch_size: 1,
-                            };
-                        } else if (isNovelAi) {
-                            if (imgGenApi.imageGenKey) imgHeaders['Authorization'] = `Bearer ${imgGenApi.imageGenKey}`;
-                            imgBody = {
-                              input: finalPrompt,
-                              model: 'safe-diffusion',
-                              parameters: {
-                                width: 512,
-                                height: 512,
-                                negative_prompt: finalNegativePrompt,
-                              }
-                            };
-                        } else {
-                            // OpenAI 式生图端点归一化：用户常把地址填成带 /v1 的基址（如 https://x/v1），
-                            // 旧逻辑无脑补 /v1/images/generations 会拼成 .../v1/v1/... 404。
-                            // 这里先剥掉结尾斜杠与可能已存在的 /v1、/images/generations，再统一补规范路径。
-                            if (!fetchUrl.endsWith('/images/generations')) {
-                                fetchUrl = fetchUrl
-                                    .replace(/\/+$/, '')
-                                    .replace(/\/v1$/, '')
-                                    .replace(/\/+$/, '');
-                                fetchUrl = `${fetchUrl}/v1/images/generations`;
-                            }
-                            if (imgGenApi.imageGenKey) imgHeaders['Authorization'] = `Bearer ${imgGenApi.imageGenKey}`;
-                            imgBody = {
-                              prompt: finalPrompt,
-                              n: 1,
-                              size: '512x512',
-                              response_format: 'b64_json',
-                            };
-                        }
-
-                        const res = await fetch(fetchUrl, {
-                            method: 'POST',
-                            headers: imgHeaders,
-                            body: JSON.stringify(imgBody),
-                        });
-
-                        if (res.ok) {
-                            const resData = await res.json();
-                            let base64Data = '';
-                            if (resData.data?.[0]?.b64_json) {
-                                base64Data = resData.data[0].b64_json;
-                            } else if (resData.data?.[0]?.url) {
-                                const imgRes = await fetch(resData.data[0].url);
-                                if (imgRes.ok) {
-                                    const imgBlob = await imgRes.blob();
-                                    const refUrl = await putImageBlob(imgBlob);
-                                    images = [refUrl];
-                                }
-                            } else if (resData.images?.[0]) {
-                                base64Data = resData.images[0];
-                            } else if (resData.image) {
-                                base64Data = resData.image;
-                            }
-
-                            if (base64Data) {
-                                const mimeType = base64Data.startsWith('data:') ? (base64Data.match(/^data:([^;]+)/)?.[1] || 'image/png') : 'image/png';
-                                const pureBase64 = base64Data.startsWith('data:') ? base64Data.split(',')[1] : base64Data;
-                                const binary = atob(pureBase64);
-                                const len = binary.length;
-                                const bytes = new Uint8Array(len);
-                                for (let i = 0; i < len; i++) {
-                                    bytes[i] = binary.charCodeAt(i);
-                                }
-                                const imgBlob = new Blob([bytes], { type: mimeType });
-                                const refUrl = await putImageBlob(imgBlob);
-                                images = [refUrl];
-                            }
-                        }
-                    } catch (err) {
-                        console.error('Forum ImageGen failed:', err);
-                    }
-                }
+                const images = rawEmojis.map((e: any) => codepointToEmoji(String(e ?? '✨')));
 
                 return {
-                    id: `post-${Date.now()}-${Math.random()}`,
+                    id: `post-${Date.now()}-${idx}-${Math.random()}`,
                     authorName: item.authorName || 'Unknown',
                     authorAvatar: avatar,
                     title: item.title || '无标题',
@@ -710,10 +681,17 @@ ${charContexts}
                     bgStyle: getRandomStyle().bg,
                     authorType: isCharacterPost ? 'character' : 'stranger',
                     authorCharId: matchedChar?.id,
-                };
-            }));
+                } as SocialPost;
+            });
             prependPostsToFeed(newPosts);
             addToast('首页已刷新: 冲浪模式开启', 'success');
+
+            // 后台逐条补图：帖子已经显示，图片画好一张替换一张，不再让用户干等所有图。
+            if (isImageGenEnabled()) {
+                newPosts.forEach((p, i) => {
+                    if (p.content) runPostImageGen(p.id, validItems[i]?.content || p.content);
+                });
+            }
         } catch (e: any) {
             if (refreshTimedOut) addToast('刷新超时（60秒），可能是中转较慢或选用模型较慢，请稍后重试', 'error');
             else if (e?.name !== 'AbortError') addToast('刷新失败: ' + e.message, 'error');
