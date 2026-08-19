@@ -108,6 +108,38 @@ const safeParseJSON = (input: string) => {
     }
 };
 
+// --- 角色熟人（论坛路人里掺入角色通讯录里认识的人）---
+// 从被抽中角色的 phoneState.contacts 里挑出「关系还在」的熟人，喂进生成 prompt，
+// 让一部分路人是角色真正认识的人（朋友/家人/同事…）而不是全凭空捏的陌生网名。
+// 已拉黑/已删除的不算熟人；优先好感高、有备注的。每个角色最多取几条，避免 prompt 膨胀。
+const collectAcquaintances = (
+    chars: { name: string; phoneState?: { contacts?: any[] } }[],
+    perCharCap: number = 5,
+): { text: string; names: Set<string> } => {
+    const names = new Set<string>();
+    const lines: string[] = [];
+    for (const c of chars) {
+        const contacts = (c.phoneState?.contacts || [])
+            .filter((ct: any) => ct && ct.name && ct.status !== 'blocked' && ct.status !== 'deleted')
+            .sort((a: any, b: any) => {
+                const noteRank = (x: any) => (x.note && String(x.note).trim() ? 1 : 0);
+                if (noteRank(b) !== noteRank(a)) return noteRank(b) - noteRank(a);
+                return (b.affinity ?? 0) - (a.affinity ?? 0);
+            })
+            .slice(0, perCharCap);
+        if (contacts.length === 0) continue;
+        const parts = contacts.map((ct: any) => {
+            const rel = String(ct.note || '').trim();
+            const affinity = typeof ct.affinity === 'number' ? ct.affinity : 0;
+            const tone = affinity <= -30 ? '（关系紧张）' : affinity >= 40 ? '（关系亲近）' : '';
+            names.add(ct.name);
+            return `  · ${ct.name}${rel ? `（${rel}）` : ''}${tone}`;
+        });
+        lines.push(`【${c.name} 认识的人】\n${parts.join('\n')}`);
+    }
+    return { text: lines.join('\n'), names };
+};
+
 // --- Icons ---
 
 const Icons = {
@@ -457,6 +489,12 @@ const SocialApp: React.FC = () => {
                 charContexts += `\n<<< 角色档案: ${char.name} >>>\n${coreContext}\n${recentStatus}\n<<< 档案结束 >>>\n`;
             }
 
+            // 角色通讯录里「认识的人」——让一部分路人是角色真正认识的熟人
+            const { text: acquaintanceText } = collectAcquaintances(selectedChars);
+            const acquaintanceBlock = acquaintanceText
+                ? `\n### 👥 角色认识的人（熟人池）\n下面是选中角色通讯录里真实认识的人（朋友/家人/同事等，括号内是关系备注）。\n生成路人帖时，请让其中**一部分**帖子出自这些熟人之手（用他们的名字当 authorName），内容要贴合他们和角色的关系；其余仍是完全陌生的网友。\n${acquaintanceText}\n`
+                : '';
+
             // 新增：全局输入框控制生成内容方向
             const globalDirection = localStorage.getItem('spark_global_direction') || '';
             const directionPrompt = globalDirection 
@@ -475,6 +513,8 @@ ${directionPrompt}
 
 2. **路人/网友发帖 (70%)**: 
    - 模拟真实的互联网生态：吃瓜群众、技术宅、美妆博主、情感树洞。
+   - 如果下方提供了【熟人池】，请让这 70% 里的**一部分**帖子出自角色认识的人（用熟人池里的名字），内容贴合其与角色的关系；**剩下的**才是与角色毫无关系的完全陌生网友。没有熟人池时全部是陌生网友。
+${acquaintanceBlock}
 
 ### 身份配置
 ${identityMap}
@@ -688,6 +728,12 @@ ${charContexts}
             for (const char of selectedChars) {
                 contextPrompt += `\n<<< 评论者角色: ${char.name} >>>\n${ContextBuilder.buildCoreContext(char, userProfile, false)}\n`;
             }
+
+            // 角色通讯录里「认识的人」——评论区里也掺入角色认识的熟人
+            const { text: acquaintanceText } = collectAcquaintances(selectedChars);
+            const acquaintanceBlock = acquaintanceText
+                ? `\n### 👥 角色认识的人（熟人池）\n下面是评论者角色通讯录里真实认识的人（括号内是关系备注）。\n生成路人评论时，请让其中**一部分**评论出自这些熟人（用他们的名字当 author），语气贴合其与角色的关系；其余仍是完全陌生的网友。\n${acquaintanceText}\n`
+                : '';
             
             let authorType = "Stranger";
             if (post.authorType === 'user') authorType = "User";
@@ -723,7 +769,7 @@ ${post.content || '(楼主没写正文)'}
 ${directionPrompt}
 请基于上面的【标题 + 正文】生成 4-6 条评论，评论要切实回应正文里提到的内容，不要只对着标题空泛地说。混合使用 **选定角色** 和 **随机路人**。
 角色评论时，请选择一个符合语境的马甲身份。
-
+${acquaintanceBlock}
 ### 角色身份库
 ${identityMap}
 
