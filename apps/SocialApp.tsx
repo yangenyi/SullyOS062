@@ -478,15 +478,22 @@ const SocialApp: React.FC = () => {
             let identityMap = "### 角色身份表 (Identities)\n";
 
             for (const char of selectedChars) {
-                const coreContext = ContextBuilder.buildCoreContext(char, userProfile, false);
-                const msgs = await DB.getMessagesByCharId(char.id);
-                const recentStatus = msgs.length > 0 ? `(最近私聊状态: 刚和用户聊过 "${msgs[msgs.length-1].content.substring(0, 20)}...")` : '(最近无私聊，生活平淡)';
-                
+                // 帖子生成同样不需要完整人设+世界书+记忆——那会把请求体撑到上万字符、拖慢刷新。
+                // 只给「角色名 + 精简人设」；最近私聊状态用轻量方式取最后一条，不再整段读历史。
+                const persona = (char.systemPrompt || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+                let recentStatus = '(最近无私聊，生活平淡)';
+                try {
+                    const msgs = await DB.getMessagesByCharId(char.id);
+                    if (msgs.length > 0 && msgs[msgs.length - 1]?.content) {
+                        recentStatus = `(最近私聊状态: 刚和用户聊过 "${String(msgs[msgs.length - 1].content).substring(0, 20)}...")`;
+                    }
+                } catch { /* 取不到就用默认，不阻塞刷新 */ }
+
                 const handles = characterHandles[char.id] || [];
                 const handleList = handles.map(h => `- 网名: "${h.handle}" (备注: ${h.note})`).join('\n');
-                
+
                 identityMap += `\n角色 [${char.name}] 可用账号:\n${handleList}\n`;
-                charContexts += `\n<<< 角色档案: ${char.name} >>>\n${coreContext}\n${recentStatus}\n<<< 档案结束 >>>\n`;
+                charContexts += `\n<<< 角色档案: ${char.name} >>>\n${persona || '（无额外人设）'}\n${recentStatus}\n<<< 档案结束 >>>\n`;
             }
 
             // 角色通讯录里「认识的人」——让一部分路人是角色真正认识的熟人
@@ -735,7 +742,10 @@ ${charContexts}
 
             let contextPrompt = "";
             for (const char of selectedChars) {
-                contextPrompt += `\n<<< 评论者角色: ${char.name} >>>\n${ContextBuilder.buildCoreContext(char, userProfile, false)}\n`;
+                // 评论区不需要完整人设+世界书+记忆（那会把请求体撑到上万字符、拖慢甚至超时）。
+                // 只给「角色名 + 精简人设」即可——路人/角色对一条帖子随口评几句，轻量上下文足够。
+                const persona = (char.systemPrompt || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+                contextPrompt += `\n<<< 评论者角色: ${char.name} >>>\n${persona || '（无额外人设）'}\n`;
             }
 
             // 角色通讯录里「认识的人」——评论区里也掺入角色认识的熟人
@@ -793,13 +803,21 @@ ${contextPrompt}
 [
   { "author": "网名 (Handle) 或 路人昵称", "content": "评论内容..." }
 ]`;
-            const response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
-                body: JSON.stringify({ model: apiConfig.model, messages: [{ role: "user", content: prompt }], temperature: 0.8 }),
-                signal: controller.signal,
-                __sullyMeta: { appId: 'social', appName: 'Spark', purpose: '生成帖子评论' },
-            } as RequestInit);
+            // 评论生成加 45s 超时，避免中转慢时无限转圈
+            let commentTimedOut = false;
+            const commentTimeout = setTimeout(() => { commentTimedOut = true; controller.abort(); }, 45000);
+            let response: Response;
+            try {
+                response = await fetch(`${apiConfig.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiConfig.apiKey}` },
+                    body: JSON.stringify({ model: apiConfig.model, messages: [{ role: "user", content: prompt }], temperature: 0.8, max_tokens: 1200 }),
+                    signal: controller.signal,
+                    __sullyMeta: { appId: 'social', appName: 'Spark', purpose: '生成帖子评论' },
+                } as RequestInit);
+            } finally {
+                clearTimeout(commentTimeout);
+            }
             if (!response.ok) throw new Error(await apiErrorMessage(response));
             const data = await safeResponseJson(response);
             if (controller.signal.aborted) return;
@@ -839,16 +857,9 @@ ${contextPrompt}
                 }));
             }
         } catch (e: any) {
-            if (e?.name !== 'AbortError') addToast(`评论加载失败: ${e?.message || e}`, 'error');
+            if (commentTimedOut) addToast('评论加载超时（45秒），可能是中转较慢或帖子上下文过长，请稍后重试', 'error');
+            else if (e?.name !== 'AbortError') addToast(`评论加载失败: ${e?.message || e}`, 'error');
         } finally {
-            if (commentRequestRef.current?.controller === controller) {
-                commentRequestRef.current = null;
-                if (mountedRef.current) setLoadingComments(false);
-            }
-        }
-    };
-
-    const generateRepliesToUser = async (post: SocialPost, userContent: string) => {
         if (!apiConfig.apiKey) return;
         if (replyRequestRef.current) return;
         const controller = new AbortController();
