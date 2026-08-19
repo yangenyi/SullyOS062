@@ -357,6 +357,31 @@ const DateSettings: React.FC<DateSettingsProps> = ({ char, onBack }) => {
                         </button>
                     </div>
 
+                    {/* 线下回复字数：控制每轮见面生成的篇幅（存 char.dateWordLimit，datePrompts 读取注入） */}
+                    <div className="mb-5">
+                        <label className="text-[11px] text-slate-500 font-bold mb-2 block">回复字数</label>
+                        <div className="flex flex-wrap gap-2">
+                            {([
+                                [undefined, '不限制'],
+                                [800, '约 800 字'],
+                                [1500, '约 1500 字'],
+                                [2500, '约 2500 字'],
+                            ] as const).map(([val, label]) => {
+                                const active = ((char as any).dateWordLimit ?? undefined) === val;
+                                return (
+                                    <button
+                                        key={label}
+                                        onClick={() => updateCharacter(char.id, { dateWordLimit: val } as any)}
+                                        className={`px-3.5 py-2 rounded-full text-xs font-bold transition-all active:scale-95 ${active ? 'bg-primary text-white shadow-md shadow-primary/20' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                                    >
+                                        {label}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">控制每轮见面生成的篇幅。默认不限制（按剧情自然铺陈）；设定后会写进见面提示词让 ta 尽量贴近这个字数。只作用于线下见面。</p>
+                    </div>
+
                     {/* 自定义补充 */}
                     <div>
                         <label className="text-[11px] text-slate-500 font-bold mb-2 block">自定义补充（可选）</label>

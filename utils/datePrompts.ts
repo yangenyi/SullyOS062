@@ -585,6 +585,12 @@ const buildVNModeBlock = (char: CharacterProfile, userName: string): string => {
     const extraBlock = buildExtraStyleBlock(styleConfig);
     const digBlock = isDigDeeperOn(styleConfig) ? `${DIG_DEEPER_BLOCK}\n` : '';
     const observeBlock = isObserveOn(char) ? buildObserveBlock(char) : '';
+    // 线下字数（角色设置页「线下回复字数」，每个角色单独）：设了写具体字数，
+    // 没设（不限制）就只说「长篇幅展开、不受线上短条限制」，不再写死 2000。
+    const dateWords = Number((char as any).dateWordLimit) || 0;
+    const dateWordRule = dateWords > 0
+        ? `每轮生成的字数控制在 ${dateWords} 字左右（长篇幅展开，无需受线上短条数的限制）。`
+        : `本轮可以长篇幅展开，不受线上 3-5 条短消息的限制；按剧情需要自然铺陈即可。`;
     return `### [Visual Novel Mode: 视觉小说脚本模式]
 你正在与用户进行**面对面**的互动。这不是聊天，是一场真实的见面。
 
@@ -610,7 +616,7 @@ ${preset.block}
    - 无法或不必直接铺开的部分，用切镜、留白、事后痕迹、关系变化和对话余波来承接——不删除张力，也不把关键事件概括成一句无关痛痒的总结。
    - 需要正面展开时，放慢节奏、重感官与氛围白描，用词贴合此刻的情绪与人物，不回避、不粉饰；文风可留白、可阴湿、可潮湿。
    - Dirty talk 必须符合人设；严禁任何廉价的羞辱词。
-   - 每轮生成的字数控制在 2000 字左右（长篇幅展开，无需受线上 3-5 条的限制）。
+   - ${dateWordRule}
 
 ${digBlock}${povBlock}${extraBlock}### 场景上下文
 ${timeLine}- **Location**: 你们现在**面对面**。
