@@ -234,7 +234,13 @@ const Chat: React.FC = () => {
     // Which messages are currently showing "译" version (toggle state only, no API calls)
     const [showingTargetIds, setShowingTargetIds] = useState<Set<number>>(new Set());
 
-    const char = characters.find(c => c.id === activeCharacterId) || characters[0];
+    // 删光角色 / init 期 store 读取失败时 characters 可能为空。此时下面到处 render 期
+    // 裸读 char.name / char.xxx 会在 early-return 空态守卫之前就崩（hooks 必须先跑）。
+    // 参照群聊对空数据健壮的做法：无角色时用一个最小安全占位，保证 render 期读取不崩，
+    // 再用 noCharacter 标志在 hooks 全部跑完后渲染温和空态（见下方 if (noCharacter)）。
+    const realChar = characters.find(c => c.id === activeCharacterId) || characters[0];
+    const noCharacter = !realChar;
+    const char = realChar || ({ id: '', name: '', avatar: '', memories: [] } as any);
     const memoryRepairRound = useMemo(() => {
         let assistantIndex = -1;
         for (let i = messages.length - 1; i >= 0; i--) {
@@ -2985,7 +2991,7 @@ const Chat: React.FC = () => {
     // 但若 init 期间某个 store 读取失败（数据其实还在 IndexedDB 里），characters 可能暂时为空，
     // 此时下面 char.chatBackground 会直接抛 "undefined is not an object" 把整个 App 崩到错误页。
     // 这里给个温和空态，避免硬崩，也好让用户能退回桌面/重启恢复。
-    if (!char) {
+    if (noCharacter) {
         return (
             <div className="flex flex-col items-center justify-center h-full bg-[#f1f5f9] text-center px-8 gap-3">
                 <div className="text-4xl">💤</div>
