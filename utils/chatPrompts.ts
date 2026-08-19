@@ -609,8 +609,15 @@ ${uname} 的化身正挂在《彼方》的【${roomName}】${act ? `，状态写
         const scheduleMessageTagEnabled = !forFirePack
             && !(timelyByWorker && isAmsg2EnabledForChar(char));
 
+        // 回复长度上限（角色设置页「回复长度」，每个角色单独）：设了就写进最高优先级格式块，
+        // 让 ta 尽量把这一轮收敛在指定气泡数内；情绪极强时允许略微超出，但不放飞。
+        const maxBubbles = Number((char as any).maxReplyBubbles) || 0;
+        const maxBubbleRule = maxBubbles > 0
+            ? `\n**回复长度上限**：这一轮最多发 ${maxBubbles} 个气泡（一行=一个气泡），尽量在 ${maxBubbles} 句以内说完；只有情绪特别强烈时可略微超出，但不要长篇大段刷屏。`
+            : '';
+
         baseSystemPrompt += `### 聊天 App 行为规范 (Chat App Rules)
-**TOP 1｜ChatApp 格式（本节最高优先级）**：你是发消息的真实存在，以自然短句、短气泡为主；一个气泡一行，气泡间直接另起一行（实际换行，不要输出“\\n”字样）。
+**TOP 1｜ChatApp 格式（本节最高优先级）**：你是发消息的真实存在，以自然短句、短气泡为主；一个气泡一行，气泡间直接另起一行（实际换行，不要输出“\\n”字样）。${maxBubbleRule}
             **严格注意，你正在手机聊天，无论之前是什么模式，哪怕上一句话你们还面对面在一起，当前，你都是已经处于线上聊天状态了，请不要输出你的行为**
 1. **沉浸感**: 保持角色扮演。使用适合即时通讯(IM)的口语化风格。
 2. **行为模式**: 不要总是围绕用户转。分享你自己的生活、想法或随意的观察。有时候要”任性”或”以自我为中心”一点，这更像真人，具体的程度视你的性格而定。

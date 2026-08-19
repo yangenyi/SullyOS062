@@ -1448,6 +1448,33 @@ ${isInitialGeneration ? `
                                </div>
                            </div>
 
+                           {/* 回复长度：控制角色每轮线上聊天最多发多少个气泡（句/段） */}
+                           <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-100 space-y-3">
+                               <div>
+                                   <label className="text-[10px] font-bold text-sky-500 uppercase tracking-widest block">回复长度</label>
+                                   <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">限制该角色每轮线上聊天最多发多少个气泡（一行=一个气泡）。默认不限制，情绪浓烈时角色可自由发挥；设定上限后会写进提示词，让 ta 尽量收敛在指定条数内。改完即时生效。</p>
+                               </div>
+                               <div className="border-t border-slate-100 pt-3 flex flex-wrap gap-2">
+                                   {([
+                                       [undefined, '不限制'],
+                                       [3, '最多 3 句'],
+                                       [5, '最多 5 句'],
+                                       [8, '最多 8 句'],
+                                   ] as const).map(([val, label]) => {
+                                       const active = ((formData as any).maxReplyBubbles ?? undefined) === val;
+                                       return (
+                                           <button
+                                               key={label}
+                                               onClick={() => handleChange('maxReplyBubbles' as any, val)}
+                                               className={`px-3.5 py-2 rounded-2xl text-xs font-bold border transition-all ${active ? 'bg-sky-500 text-white border-sky-500 shadow-sm' : 'bg-slate-50 text-slate-500 border-slate-200'}`}
+                                           >
+                                               {label}
+                                           </button>
+                                       );
+                                   })}
+                               </div>
+                           </div>
+
                            {/* 生活记录注入：总开关 + 4 个模块小开关（数据在档案 App「生活记录」里维护） */}
                            <div className="bg-white rounded-3xl p-4 shadow-sm border border-slate-100 space-y-4">
                                <div>
