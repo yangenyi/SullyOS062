@@ -442,8 +442,6 @@ interface UseChatAIProps {
     emojis: Emoji[];
     categories: EmojiCategory[];
     addToast: (msg: string, type: 'info'|'success'|'error') => void;
-    /** 长报错走弹窗 (toast 一行装不下), 手机用户能看清并复制反馈 */
-    showError?: (title: string, details: string) => void;
     setMessages: (msgs: Message[]) => void; // Callback to update UI messages
     /** 正式消息接替流式预览前同步登记 id，避免真实气泡重新播放入场动画。 */
     onStreamPreviewHandover?: (charId: string, messageIds: number[]) => void;
@@ -468,7 +466,6 @@ export const useChatAI = ({
     emojis,
     categories,
     addToast,
-    showError,
     setMessages,
     onStreamPreviewHandover,
     realtimeConfig,  // 新增
@@ -726,7 +723,17 @@ export const useChatAI = ({
         // 再调 triggerAI 的, 这里 return 掉而不通知的话指示灯会永远亮着。
         if (isTyping || !char) { onInstantPosted?.(); return; }
         const effectiveApi = overrideApiConfig || apiConfig;
-        if (!effectiveApi.baseUrl) { alert("请先在设置中配置 API URL"); onInstantPosted?.(); return; }
+        if (!effectiveApi.baseUrl) {
+            await DB.saveMessage({
+                charId: char.id,
+                role: 'system',
+                type: 'text',
+                content: '[发送失败：请先在设置中配置 API URL]',
+            });
+            setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
+            onInstantPosted?.();
+            return;
+        }
 
         // 重 roll（回溯重生）时不带入上一轮的情绪余波：清掉 buff 注入（buffInjection/activeBuffs）和
         // 意识流（innerState/evolvedNarrative），让主回复与情绪评估两边都从干净状态独立重新生成——
@@ -917,10 +924,8 @@ export const useChatAI = ({
                     // （熄 isTyping / 熄「发送准备中」灯 / 停 KeepAlive），和那条失败路径同一段。
                     const reason = '即时对话暂时出了点问题：本地配置这一刻读不出来（可能是存储正忙）。这条没有发出去，稍等几秒重新发一次就好。';
                     console.warn('[AmsgInstantChat] 全局配置读不出来，开没开都不知道：这一轮明确报错等重发，不悄悄退回本地生成');
-                    await DB.saveMessage({ charId: char.id, role: 'system', type: 'text', content: `[${reason}]` });
+                    await DB.saveMessage({ charId: char.id, role: 'system', type: 'text', content: `[发送失败：${reason}]` });
                     setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
-                    if (showError) showError('即时对话发送失败', reason);
-                    else addToast(reason, 'error');
                     return;
                 }
                 console.warn('[AmsgInstantChat] 全局配置读不出来（开没开都不知道），但这一轮本就不走即时对话，照原路继续');
@@ -1300,28 +1305,21 @@ export const useChatAI = ({
                     ...(cloudEmotionEval ? { emotionEval: cloudEmotionEval } : {}),
                 }, char.id, undefined, onInstantPosted);
                 if (!instantResult.ok && instantResult.outcome !== 'cancelled') {
-                    // 长报错 (worker 400 校验信息 + CF 错误页可能很长) 走弹窗, 手机用户能
-                    // 看清并复制反馈; 没注入 showError 时降级到 toast.
-                    // 完整诊断由 instantPushClient 的 formatDiagnostics 输出 —— 涵盖
-                    // http (status/bodyBytes/keepalive/cf-ray/response 截断) / fetchError /
-                    // config / subscription / timeout / context / env 各段, 已主动 mask
-                    // worker / api host, 不含 apiKey / apiUrl / workerUrl / push endpoint.
-                    //
-                    // 'cancelled' = pagehide / signal abort, caller 自己取消的, 不弹错。
+                    // 聊天发送失败只在当前会话内提示，避免打断用户正在查看的聊天内容。
                     const errMsg = instantResult.error || '未知错误';
-                    if (showError && instantResult.diagnostics) {
-                        showError(
-                            'Instant Push 发送失败',
-                            formatDiagnostics(instantResult.diagnostics, {
-                                outcome: instantResult.outcome,
-                                reason: errMsg,
-                            }),
-                        );
-                    } else if (showError) {
-                        showError('Instant Push 发送失败', `outcome: ${instantResult.outcome}\nreason: ${errMsg}`);
-                    } else {
-                        addToast(`Instant Push: ${errMsg}`, 'error');
-                    }
+                    const detail = instantResult.diagnostics
+                        ? formatDiagnostics(instantResult.diagnostics, {
+                            outcome: instantResult.outcome,
+                            reason: errMsg,
+                        })
+                        : `outcome: ${instantResult.outcome}\nreason: ${errMsg}`;
+                    await DB.saveMessage({
+                        charId: char.id,
+                        role: 'system',
+                        type: 'text',
+                        content: `[发送失败：${detail}]`,
+                    });
+                    setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
                 }
                 // 发送失败/取消 → worker 不会跑情绪评估，那个正常的熄灭信号永不到达，当场自己熄。
                 if (!instantResult.ok && cloudEmotionEval) extinguishCloudEmotionBadge();
@@ -1401,10 +1399,8 @@ export const useChatAI = ({
                     // 没发出去就是没发出去：明确落一条系统消息 + 弹错，用户可以直接重发。
                     // **绝不静默退回本地生成** —— 静默分流那种查无可查的坑踩过一次就够了。
                     const reason = instantChatResult.error || '未知错误';
-                    await DB.saveMessage({ charId: char.id, role: 'system', type: 'text', content: `[${reason}]` });
+                    await DB.saveMessage({ charId: char.id, role: 'system', type: 'text', content: `[发送失败：${reason}]` });
                     setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
-                    if (showError) showError('即时对话发送失败', reason);
-                    else addToast(reason, 'error');
                     // 没发出去 → 云端不会跑评估，那个正常的熄灭信号永不到达。当场自己熄，
                     // 否则「情绪更新中」要一直亮到 11 分钟后安全网到点。
                     if (cloudEmotionEval) extinguishCloudEmotionBadge();

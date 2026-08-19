@@ -15,7 +15,6 @@ import { DEFAULT_ARCHIVE_PROMPTS } from '../components/chat/ChatConstants';
 import ImpressionPanel from '../components/character/ImpressionPanel';
 import RoomPlatePanel from '../components/character/RoomPlatePanel';
 import MemoryArchivist from '../components/character/MemoryArchivist';
-import ChibiStudio, { ChibiShelfPanel } from '../components/character/ChibiStudio';
 import { characterLaunch } from '../utils/characterLaunch';
 import { safeFetchJson, extractContent } from '../utils/safeApi';
 import { fetchMiniMaxVoices, MiniMaxVoiceItem } from '../utils/minimaxVoice';
@@ -110,9 +109,7 @@ const Character: React.FC = () => {
           return next;
       });
   };
-  const [detailTab, setDetailTab] = useState<'identity' | 'memory' | 'impression' | 'plates' | 'chibi'>(() => launchIntent?.openChibiStudio ? 'chibi' : 'identity');
-  // QQ捏人工坊（手办柜）全屏覆盖层
-  const [showChibiStudio, setShowChibiStudio] = useState(() => !!launchIntent?.openChibiStudio);
+  const [detailTab, setDetailTab] = useState<'identity' | 'memory' | 'impression' | 'plates'>(() => 'identity');
   const [editingId, setEditingId] = useState<string | null>(() => launchIntent?.charId || null);
   const [formData, setFormData] = useState<CharacterProfile | null>(null);
   const [isCompressing, setIsCompressing] = useState(false);
@@ -1278,7 +1275,6 @@ ${isInitialGeneration ? `
                        <button onClick={() => { setDetailTab('memory'); trackEvent('切换角色详情标签页', { tab: 'memory' }); }} className={`pb-2 transition-colors relative ${detailTab === 'memory' ? 'text-slate-800' : ''}`}>记忆 ({(formData.memories || []).length}){detailTab === 'memory' && <div className="absolute bottom-0 left-0 w-full h-0.5 bg-primary rounded-full"></div>}</button>
                        <button onClick={() => { setDetailTab('impression'); trackEvent('切换角色详情标签页', { tab: 'impression' }); }} className={`pb-2 transition-colors relative ${detailTab === 'impression' ? 'text-slate-800' : ''}`}>印象{detailTab === 'impression' && <div className="absolute bottom-0 left-0 w-full h-0.5 bg-primary rounded-full"></div>}</button>
                        <button onClick={() => { setDetailTab('plates'); trackEvent('切换角色详情标签页', { tab: 'plates' }); }} className={`pb-2 transition-colors relative ${detailTab === 'plates' ? 'text-slate-800' : ''}`}>门牌{detailTab === 'plates' && <div className="absolute bottom-0 left-0 w-full h-0.5 bg-primary rounded-full"></div>}</button>
-                       <button onClick={() => { setDetailTab('chibi'); trackEvent('切换角色详情标签页', { tab: 'chibi' }); }} className={`pb-2 transition-colors relative ${detailTab === 'chibi' ? 'text-slate-800' : ''}`}>手办{detailTab === 'chibi' && <div className="absolute bottom-0 left-0 w-full h-0.5 bg-primary rounded-full"></div>}</button>
                    </div>
                  </div>
                </div>
@@ -1696,10 +1692,6 @@ ${isInitialGeneration ? `
                        />
                    )}
 
-                   {detailTab === 'chibi' && formData.id && (
-                       <ChibiShelfPanel charId={formData.id} onOpen={() => { setShowChibiStudio(true); trackEvent('打开QQ捏人工坊'); }} />
-                   )}
-
                    {detailTab === 'plates' && formData.id && (
                        <RoomPlatePanel charId={formData.id} userName={userProfile.name} />
                    )}
@@ -1707,19 +1699,6 @@ ${isInitialGeneration ? `
            </div>
        )}
        
-       {/* QQ捏人工坊：直接写库（sprites / vrState / specialMomentRecords / chibiStudio），
-           关闭时把最新角色数据拉回 formData——否则后续编辑会用旧副本 auto-save 盖掉工坊成果 */}
-       {showChibiStudio && formData && (
-           <ChibiStudio
-               charId={formData.id}
-               onClose={() => {
-                   setShowChibiStudio(false);
-                   const latest = characters.find(c => c.id === formData.id);
-                   if (latest) setFormData(latest);
-               }}
-           />
-       )}
-
        {/* Modals ... */}
        <Modal isOpen={showImportModal} title="记忆导入/清洗" onClose={() => setShowImportModal(false)} footer={<><button onClick={() => setShowImportModal(false)} className="flex-1 py-3 bg-slate-100 text-slate-500 font-bold rounded-2xl">取消</button><button onClick={handleImportMemories} disabled={isProcessingMemory || importLengthInfo.overLimit} className={`flex-1 py-3 text-white font-bold rounded-2xl shadow-lg flex items-center justify-center gap-2 ${importLengthInfo.overLimit ? 'bg-slate-300 cursor-not-allowed shadow-none' : 'bg-primary shadow-primary/30'}`}>{isProcessingMemory && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>}{isProcessingMemory ? '处理中...' : importLengthInfo.overLimit ? '请先分批' : '开始执行'}</button></>}>
            <div className="space-y-3">

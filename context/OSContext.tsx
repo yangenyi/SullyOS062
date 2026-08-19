@@ -1532,76 +1532,25 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
             settle(DB.getCharacterGroups(), 'characterGroups', [] as CharacterGroup[])
         ]);
 
-        let finalChars = dbChars;
-
-        if (!finalChars.some(c => c.id === sullyV2.id)) {
-            await DB.saveCharacter(sullyV2);
-            finalChars = [...finalChars, sullyV2];
-        } else {
-            // REPAIR LOGIC
-            const existingSully = finalChars.find(c => c.id === sullyV2.id);
-            if (existingSully) {
-                 const currentSprites = existingSully.sprites || {};
-                 const isCorrupted = !currentSprites['normal'] || !currentSprites['chibi'];
-                 const needsWallUpdate = existingSully.roomConfig?.wallImage !== sullyV2.roomConfig?.wallImage;
-                 const needsSkinSets = !existingSully.dateSkinSets || existingSully.dateSkinSets.length === 0;
-                 // 默认头像曾先后使用旧图床和依赖部署根路径的本地地址。
-                 // 这些地址在备份恢复或 GitHub Pages 子路径变化后会 404；统一迁移到资产仓库。
-                 // 用户自己改过的头像不在迁移名单内，保持不动。
-                  const needsAvatarUpdate = shouldMigrateSullyAvatar(existingSully.avatar);
-                  // 内置模型只补给还没有视频形象的 Sully。用户自己导入的
-                  // VRM / Live2D 始终优先，绝不在启动修复时被覆盖。
-                  const needsBuiltinVideoAvatar = !existingSully.videoAvatar;
-                  const needsBuiltinVideoAvatarUpgrade = isBuiltinSullyLive2D(existingSully.videoAvatar)
-                      && existingSully.videoAvatar.builtinFramingVersion !== 2;
-                 // 之前误把家园 chibi 替换成了像素小屋的像素立绘 → 还原为原版 sharkpan 立绘
-                 const hasMisplacedPixelChibi = typeof currentSprites['chibi'] === 'string'
-                     && currentSprites['chibi'].startsWith('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADUAAAA4CAYAAABdeLCu');
-
-                  if (isCorrupted || !existingSully.roomConfig || needsWallUpdate || needsSkinSets || hasMisplacedPixelChibi || needsAvatarUpdate || needsBuiltinVideoAvatar || needsBuiltinVideoAvatarUpgrade) {
-                     const restoredSprites = { ...sullyV2.sprites, ...currentSprites };
-
-                     if (!restoredSprites['normal']) restoredSprites['normal'] = sullyV2.sprites!['normal'];
-                     if (!restoredSprites['happy']) restoredSprites['happy'] = sullyV2.sprites!['happy'];
-                     if (!restoredSprites['sad']) restoredSprites['sad'] = sullyV2.sprites!['sad'];
-                     if (!restoredSprites['angry']) restoredSprites['angry'] = sullyV2.sprites!['angry'];
-                     if (!restoredSprites['shy']) restoredSprites['shy'] = sullyV2.sprites!['shy'];
-                     if (!restoredSprites['chibi']) restoredSprites['chibi'] = sullyV2.sprites!['chibi'];
-                     if (hasMisplacedPixelChibi) restoredSprites['chibi'] = sullyV2.sprites!['chibi'];
-
-                     const updatedRoomConfig = existingSully.roomConfig ? {
-                         ...existingSully.roomConfig,
-                         wallImage: (existingSully.roomConfig.wallImage?.includes('radial-gradient') || !existingSully.roomConfig.wallImage)
-                                    ? sullyV2.roomConfig?.wallImage
-                                    : existingSully.roomConfig.wallImage
-                     } : sullyV2.roomConfig;
-
-                     // Merge preset skin sets: add any preset skins not already present
-                     const existingSkins = existingSully.dateSkinSets || [];
-                     const presetSkins = sullyV2.dateSkinSets || [];
-                     const mergedSkins = [...existingSkins];
-                     for (const ps of presetSkins) {
-                         if (!mergedSkins.some(s => s.id === ps.id)) {
-                             mergedSkins.push(ps);
-                         }
-                     }
-
-                     const updatedSully = {
-                         ...existingSully,
-                          avatar: needsAvatarUpdate ? sullyV2.avatar : existingSully.avatar,
-                          videoAvatar: existingSully.videoAvatar?.format === 'live2d'
-                              ? upgradeBuiltinSullyLive2DDefaults(existingSully.videoAvatar)
-                              : existingSully.videoAvatar || sullyV2.videoAvatar,
-                          sprites: restoredSprites,
-                         roomConfig: updatedRoomConfig,
-                         dateSkinSets: mergedSkins
-                     };
-                     
-                     await DB.saveCharacter(updatedSully);
-                     finalChars = finalChars.map(c => c.id === sullyV2.id ? updatedSully : c);
-                 }
+        // Retire only the historical built-in preset. This is deliberately keyed
+        // by its immutable preset ID, never by the display name "Sully", so user
+        // created or imported characters remain untouched.
+        const retiredBuiltin = dbChars.find(c => c.id === sullyV2.id);
+        if (retiredBuiltin) {
+            try {
+                const gallery = await DB.getGalleryImages(sullyV2.id);
+                await purgeCharCloudState(retiredBuiltin);
+                await Promise.all([
+                    DB.deleteCharacter(sullyV2.id),
+                    DB.clearMessages(sullyV2.id),
+                    ...gallery.map(image => DB.deleteGalleryImage(image.id)),
+                ]);
+                ProactiveChat.stop(sullyV2.id);
+            } catch (error) {
+                console.warn('[BuiltinSully] cleanup failed; it will retry on next launch', error);
             }
         }
+        let finalChars = dbChars.filter(c => c.id !== sullyV2.id);
 
         let resetAutoContextCount = 0;
         let migratedContextCount = 0;
@@ -1627,15 +1576,12 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           const lastActiveId = localStorage.getItem('os_last_active_char_id');
           if (lastActiveId && finalChars.find(c => c.id === lastActiveId)) {
             setActiveCharacterId(lastActiveId);
-          } else if (finalChars.find(c => c.id === sullyV2.id)) {
-            setActiveCharacterId(sullyV2.id);
           } else {
             setActiveCharacterId(finalChars[0].id);
           }
         } else {
-          await DB.saveCharacter(initialCharacter);
-          setCharacters([initialCharacter]);
-          setActiveCharacterId(initialCharacter.id);
+          setCharacters([]);
+          setActiveCharacterId('');
         }
 
         setGroups(dbGroups);

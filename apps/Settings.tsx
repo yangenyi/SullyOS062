@@ -20,17 +20,10 @@ import { FISH_VOICE_ACTING_GUIDE } from '../utils/fishAudioTts';
 import { DATE_VOICE_GUIDE } from '../utils/datePrompts';
 import { Sun, Newspaper, NotePencil, Notebook, Book, ForkKnife, Coffee, PlugsConnected } from '@phosphor-icons/react';
 import { loadMcpServers, saveMcpServers, createMcpServer, testMcpConnection, resetMcpSession, getMcpUseNativeTools, setMcpUseNativeTools, type McpServerConfig } from '../utils/mcpClient';
-import { loadPushConfig, savePushConfig, registerScheduleOnWorker, startHeartbeat, stopHeartbeat, isPushConfigAvailable, ensureSubscribed, sendTestPush, getPushDiagnostics, resetSubscription, deepResetSubscription, type PushDiagnostics } from '../utils/proactivePushConfig';
-import { ProactiveChat } from '../utils/proactiveChat';
-import { InstantPushSettingsModal } from '../components/settings/InstantPushSettingsModal';
-import { PushVapidSettingsModal } from '../components/settings/PushVapidSettingsModal';
-import PushSubscriptionPanel from '../components/settings/PushSubscriptionPanel';
-import ActiveMsgGlobalSettingsModal from '../components/settings/ActiveMsgGlobalSettingsModal';
+
 import { syncAmsgLlmCredentials, syncAmsgToolConfig, syncAmsgToolConfigAndPrompts } from '../utils/amsgStateSync';
 import { ActiveMsgClient } from '../utils/activeMsgClient';
 import VersionInfo from '../components/settings/VersionInfo';
-import { isPushVapidReady } from '../utils/pushVapid';
-import ApiCallLogModal from '../components/settings/ApiCallLogModal';
 import { DB } from '../utils/db';
 import { getBackupReminderState, setBackupReminderIntervalDays, daysSinceLastBackup, BACKUP_REMINDER_MIN_DAYS, BACKUP_REMINDER_MAX_DAYS } from '../utils/backupReminder';
 import {
@@ -69,9 +62,6 @@ const HOTNEWS_PLATFORM_OPTIONS: { key: string; label: string }[] = [
     { key: 'tenxunwang', label: '腾讯网' },
 ];
 
-// 「主动消息 Push 加速」面板入口开关。底层逻辑（心跳、订阅、诊断）全部保留，
-// 这里设为 false 只是把设置页里的入口隐藏掉，想恢复改回 true 即可。
-const SHOW_PROACTIVE_PUSH_ACCEL_UI = false;
 const VISION_MODEL_LIST_STORAGE_KEY = 'os_vision_available_models';
 
 const readStoredVisionModels = (): string[] => {
@@ -524,7 +514,6 @@ const Settings: React.FC = () => {
   const [showExportModal, setShowExportModal] = useState(false); // Used for completion now
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showPresetModal, setShowPresetModal] = useState(false);
-  const [showApiCallLog, setShowApiCallLog] = useState(false);
   const [showRealtimeModal, setShowRealtimeModal] = useState(false);
   const [showMcpModal, setShowMcpModal] = useState(false);
   const [showMcpHelp, setShowMcpHelp] = useState(false);
@@ -551,8 +540,6 @@ const Settings: React.FC = () => {
   // GitHub local state
   const [ghToken, setGhToken] = useState(cloudBackupConfig.githubToken || '');
   const [ghRepo, setGhRepo] = useState(cloudBackupConfig.githubRepo || 'sully-backup');
-  // 安全默认：旧版曾把代理默认打开。现在旧配置一律视为未重新确认，只有在
-  // 新版说明下手动开启过（consentVersion=1）才保持勾选。
   const [ghUseProxy, setGhUseProxy] = useState(
       cloudBackupConfig.githubUseProxy === true && cloudBackupConfig.githubProxyConsentVersion === 1
   );
@@ -641,25 +628,6 @@ const Settings: React.FC = () => {
       return stored !== 'false';
   });
 
-  // Proactive Push 加速器（Worker URL / VAPID 公钥写死在 proactivePushConfig.ts 常量里）
-  const initialPushCfg = loadPushConfig();
-  const ppAvailable = isPushConfigAvailable();
-  const [ppEnabled, setPpEnabled] = useState(initialPushCfg.enabled);
-  const [ppStatus, setPpStatus] = useState<string>('');
-  const [ppBusy, setPpBusy] = useState(false);
-  const [showPpConfirm, setShowPpConfirm] = useState(false);
-  const [ppDiag, setPpDiag] = useState<PushDiagnostics | null>(null);
-  const [ppTestBusy, setPpTestBusy] = useState(false);
-  const [ppResetBusy, setPpResetBusy] = useState(false);
-  const [ppDeepResetBusy, setPpDeepResetBusy] = useState(false);
-  // 连续 zombie 重置失败次数 — 累计 >= 3 时, "重置订阅" 按钮自动 morph 成
-  // "深度重置". 不持久化, 刷新页面归零 (用户原话: "刷新页面正常消失").
-  const [ppZombieStreak, setPpZombieStreak] = useState(0);
-  const [showInstantModal, setShowInstantModal] = useState(false);
-  const [showAmsg2Modal, setShowAmsg2Modal] = useState(false);
-  const [showVapidModal, setShowVapidModal] = useState(false);
-  const [vapidReadyTick, setVapidReadyTick] = useState(0); // 关闭 VAPID 弹窗后刷新顶层徽标
-
   // 模型选择 Modal 的过滤 + 公共前缀（memo 掉，避免每次 Settings 重渲染都重算）
   const modelPickerView = useMemo(
       () => buildModelPickerView(availableModels, modelFilter),
@@ -670,152 +638,27 @@ const Settings: React.FC = () => {
       [visionModelFilter, availableVisionModels],
   );
 
-  const refreshPpDiag = useCallback(async () => {
-      try { setPpDiag(await getPushDiagnostics()); } catch { /* ignore */ }
-  }, []);
-
-  const doEnablePushAccelerator = async () => {
-      if (ppBusy) return;
-      setPpBusy(true);
-      setPpStatus('正在连接 Worker…');
-      try {
-          const res = await fetch(`${initialPushCfg.workerUrl}/health`);
-          if (!res.ok) {
-              trackEvent('启用主动消息 Push 加速', { result: 'fail', failStage: 'worker_health' });
-              trackEvent('启用 Push 加速器的结果', { result: 'worker-unreachable' });
-              setPpStatus(`失败：Worker HTTP ${res.status}`); setPpBusy(false); return;
-          }
-      } catch (e: any) {
-          trackEvent('启用主动消息 Push 加速', { result: 'fail', failStage: 'network' });
-          trackEvent('启用 Push 加速器的结果', { result: 'worker-unreachable' });
-          setPpStatus(`失败：${e?.message || '网络错误'}`); setPpBusy(false); return;
-      }
-
-      // Step 1: ensure permission + subscription up front, regardless of schedules.
-      // This is the fix for the old bug where toggle "succeeded" without ever
-      // requesting permission when the user hadn't enabled any character timer yet.
-      setPpStatus('正在请求通知权限并创建订阅…');
-      const sub = await ensureSubscribed();
-      if (!sub.ok) {
-          trackEvent('启用主动消息 Push 加速', { result: 'fail', failStage: 'subscribe' });
-          trackEvent('启用 Push 加速器的结果', { result: 'subscribe-failed' });
-          setPpStatus(`失败：${sub.reason || '订阅创建失败'}`);
-          setPpBusy(false);
-          await refreshPpDiag();
-          return;
-      }
-
-      // Step 2: persist enabled flag and start heartbeat.
-      savePushConfig(true);
-      setPpEnabled(true);
-      startHeartbeat();
-
-      // Step 3: register any existing per-character schedules.
-      const schedules = ProactiveChat.getSchedules();
-      let okCount = 0;
-      for (const s of schedules) {
-          if (await registerScheduleOnWorker(s.charId, s.intervalMs)) okCount++;
-      }
-
-      if (schedules.length === 0) {
-          trackEvent('启用主动消息 Push 加速', { result: 'success' });
-          trackEvent('启用 Push 加速器的结果', { result: 'ok-no-schedule' });
-          setPpStatus('已启用（订阅已建立。暂无主动消息定时，下次开启角色主动消息时会自动注册）');
-      } else if (okCount < schedules.length) {
-          trackEvent('启用主动消息 Push 加速', { result: 'partial' });
-          trackEvent('启用 Push 加速器的结果', { result: 'ok-partial-schedule' });
-          setPpStatus(`已启用：${okCount}/${schedules.length} 个定时注册成功`);
-      } else {
-          trackEvent('启用主动消息 Push 加速', { result: 'success' });
-          trackEvent('启用 Push 加速器的结果', { result: 'ok' });
-          setPpStatus(`已启用，${okCount} 个主动消息定时已注册`);
-      }
-      setPpBusy(false);
-      await refreshPpDiag();
-  };
-
-  const doDisablePushAccelerator = async () => {
-      trackEvent('关闭主动消息 Push 加速');
-      savePushConfig(false);
-      setPpEnabled(false);
-      stopHeartbeat();
-      setPpStatus('已关闭（主动消息退回本地计时器）');
-      await refreshPpDiag();
-  };
-
-  const doSendTestPush = async () => {
-      if (ppTestBusy) return;
-      setPpTestBusy(true);
-      setPpStatus('正在让 Worker 发一条测试推送…');
-      const res = await sendTestPush();
-      if (res.ok) {
-          trackEvent('发送测试推送（主动消息加速）', { result: 'sent' });
-          trackEvent('发一条测试推送', { result: 'sent' });
-          setPpStatus('测试推送已发出。如果 5 秒内系统通知里没出现"推送测试成功"，说明送达环节有问题——看下方诊断面板。');
-      } else if (res.deadSubscription) {
-          trackEvent('发送测试推送（主动消息加速）', { result: 'dead_subscription' });
-          trackEvent('发一条测试推送', { result: 'dead-subscription' });
-          setPpStatus('订阅已被浏览器吊销（zombie endpoint）。请点下方"重置订阅"重建一次再测。');
-      } else {
-          trackEvent('发送测试推送（主动消息加速）', { result: 'fail' });
-          trackEvent('发一条测试推送', { result: 'failed' });
-          setPpStatus(`测试失败：${res.reason || '未知错误'}${res.status ? `（HTTP ${res.status}）` : ''}`);
-      }
-      setPpTestBusy(false);
-      await refreshPpDiag();
-  };
-
-  const doResetSubscription = async () => {
-      if (ppResetBusy || ppDeepResetBusy) return;
-      setPpResetBusy(true);
-      setPpStatus('正在重置订阅…');
-      const res = await resetSubscription();
-      if (res.ok) {
-          trackEvent('重置推送订阅', { result: 'success', attempt: bucketRetryCount(ppZombieStreak) });
-          setPpZombieStreak(0);
-          setPpStatus('订阅已重建。可以再点"发一条测试推送"试一下。');
-      } else {
-          const reason = res.reason || '';
-          // 失败原因指向 zombie endpoint 时累计, 达到 3 次后按钮自动 morph 成深度重置
-          if (/permanently-removed|zombie/i.test(reason)) {
-              setPpZombieStreak(c => c + 1);
-          }
-          // 只上报归类后的固定枚举，失败原文一个字都不带；重试次数同样先分桶
-          trackEvent('重置推送订阅', {
-              result: /permanently-removed|zombie/i.test(reason) ? 'fail_zombie' : 'fail_other',
-              attempt: bucketRetryCount(ppZombieStreak),
-          });
-          setPpStatus(`重置失败：${reason || '未知错误'}`);
-      }
-      setPpResetBusy(false);
-      await refreshPpDiag();
-  };
-
-  const doDeepResetSubscription = async () => {
-      if (ppDeepResetBusy || ppResetBusy) return;
-      setPpDeepResetBusy(true);
-      setPpStatus('正在深度重置…');
-      const res = await deepResetSubscription();
-      // 无论成败, 按钮都回归"重置订阅" — 下次出问题再次累计触发 morph
-      setPpZombieStreak(0);
-      if (res.ok) {
-          // ProactiveChat.resume() 把所有 schedule 推回新 SW. deepResetSubscription 内部
-          // 不调它是为了避免循环依赖 (ProactiveChat 反向依赖 proactivePushConfig).
-          try { ProactiveChat.resume(); } catch (e) { console.warn('[Settings] ProactiveChat.resume failed', e); }
-          trackEvent('深度重置推送订阅', { result: 'success' });
-          setPpStatus('订阅已重建。可以再点"发一条测试推送"试一下。');
-      } else {
-          trackEvent('深度重置推送订阅', { result: 'fail' });
-          setPpStatus(`深度重置失败：${res.reason || '未知错误'}`);
-      }
-      setPpDeepResetBusy(false);
-      await refreshPpDiag();
-  };
-
-  // Refresh diagnostics whenever the panel is mounted or the toggle changes.
-  useEffect(() => {
-      void refreshPpDiag();
-  }, [refreshPpDiag, ppEnabled]);
+  // Retained only to type-check the now-unreachable legacy Push settings markup.
+  // Character proactive-message scheduling lives outside Settings and is unchanged.
+  const [ppEnabled] = useState(false);
+  const [ppStatus] = useState('');
+  const [ppBusy] = useState(false);
+  const [showPpConfirm, setShowPpConfirm] = useState(false);
+  const [ppDiag] = useState<any>(null);
+  const [ppTestBusy] = useState(false);
+  const [ppResetBusy] = useState(false);
+  const [ppDeepResetBusy] = useState(false);
+  const [ppZombieStreak] = useState(0);
+  const [showInstantModal, setShowInstantModal] = useState(false);
+  const [showAmsg2Modal, setShowAmsg2Modal] = useState(false);
+  const [showVapidModal, setShowVapidModal] = useState(false);
+  const [, setVapidReadyTick] = useState(0);
+  const refreshPpDiag = async () => {};
+  const doDisablePushAccelerator = async () => {};
+  const doSendTestPush = async () => {};
+  const doResetSubscription = async () => {};
+  const doDeepResetSubscription = async () => {};
+  const doEnablePushAccelerator = async () => {};
 
   // For web download link
   const [downloadUrl, setDownloadUrl] = useState<string>('');
@@ -2773,26 +2616,6 @@ const Settings: React.FC = () => {
             </div>
         </SettingsSection>
 
-        {/* API 调用记录入口 — 点开看最近 5 天各 App / 角色 / 用途的调用明细 */}
-        <button
-            type="button"
-            onClick={() => setShowApiCallLog(true)}
-            className="w-full bg-white/80 rounded-3xl p-5 shadow-sm border border-white/50 flex items-center gap-3 active:scale-[0.99] transition-transform text-left"
-        >
-            <div className="p-2 bg-sky-100/60 rounded-xl text-sky-600 shrink-0">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 12V5.25" />
-                </svg>
-            </div>
-            <div className="flex-1 min-w-0">
-                <h2 className="text-sm font-semibold text-slate-600 tracking-wider">API 调用记录</h2>
-                <p className="text-[11px] text-slate-400 mt-0.5">最近 5 天：时间 · 哪个 API · 哪个 App · 哪个角色 · 用途</p>
-            </div>
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-300 shrink-0">
-                <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z" clipRule="evenodd" />
-            </svg>
-        </button>
-
         {/* 其他 API 区域 — 非 LLM 类（语音、写歌等），不会跟随预设切换 */}
         <SettingsSection
             title="其他 API"
@@ -3094,54 +2917,8 @@ const Settings: React.FC = () => {
 
         {/* MCP 功能版块已被隐藏 */}
 
-        {/* ───────── 推送凭据 (VAPID) ───────── */}
-        {/* VAPID 公私钥, 与 Proactive / Instant Push 共用一份 — 独立成块, 避免再被当成 */}
-        {/* Instant Push 的子配置, 也避免两边 key 不一致互相抢同一个 pushManager 订阅. */}
-        {/* vapidReadyTick: VAPID 弹窗关闭后 +1, 让本节点 re-render 重读 isPushVapidReady(). */}
-        <SettingsSection
-            title="推送凭据 (VAPID)"
-            sectionProps={{ 'data-vapid-tick': vapidReadyTick }}
-            icon={
-                <div className="p-2 bg-violet-100/60 rounded-xl text-violet-600">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z" />
-                    </svg>
-                </div>
-            }
-            actions={
-                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${isPushVapidReady() ? 'bg-violet-100 text-violet-600' : 'bg-rose-100 text-rose-600'}`}>
-                    {isPushVapidReady() ? '已配置' : '未配置'}
-                </span>
-            }
-        >
-            <p className="text-xs text-slate-500 mb-3 leading-relaxed">
-                Proactive Push 和 Instant Push <b>共用同一份 VAPID 密钥对</b>。重新生成会让已开的推送失效，需要重新开启。
-            </p>
-            <button
-                type="button"
-                onClick={() => setShowVapidModal(true)}
-                className={`w-full py-2.5 rounded-xl text-xs font-bold ${isPushVapidReady() ? 'bg-white text-violet-700 border border-violet-200 hover:bg-violet-50' : 'bg-violet-500 text-white hover:bg-violet-600 shadow-md shadow-violet-200'}`}
-            >
-                {isPushVapidReady() ? '查看 / 重新生成' : '生成 VAPID 密钥对 →'}
-            </button>
-        </SettingsSection>
-
-        {/* ───────── 推送订阅状态（诊断 + 重置） ───────── */}
-        <SettingsSection
-            title="推送订阅状态"
-            icon={
-                <div className="p-2 bg-sky-100/60 rounded-xl text-sky-600">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 0 1-1.043 3.296 3.745 3.745 0 0 1-3.296 1.043A3.745 3.745 0 0 1 12 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 0 1-3.296-1.043 3.745 3.745 0 0 1-1.043-3.296A3.745 3.745 0 0 1 3 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 0 1 1.043-3.296 3.746 3.746 0 0 1 3.296-1.043A3.746 3.746 0 0 1 12 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 0 1 3.296 1.043 3.746 3.746 0 0 1 1.043 3.296A3.745 3.745 0 0 1 21 12Z" />
-                    </svg>
-                </div>
-            }
-        >
-            <PushSubscriptionPanel addToast={addToast} />
-        </SettingsSection>
-
-        {/* ───────── 主动消息 Push 加速器（开关） ───────── */}
-        {SHOW_PROACTIVE_PUSH_ACCEL_UI && ppAvailable && (
+        {/* Push 设置入口已移除；角色主动消息的底层调度保持不变。 */}
+        {false && (
         <SettingsSection
             title="主动消息 Push 加速"
             icon={
@@ -3326,30 +3103,6 @@ const Settings: React.FC = () => {
         </SettingsSection>
         )}
 
-        {/* ───────── Instant Push ───────── */}
-        <SettingsSection
-            title="Instant Push"
-            icon={
-                <div className="p-2 bg-indigo-100/60 rounded-xl text-indigo-600">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.348 14.651a3.75 3.75 0 0 1 0-5.303m5.304 0a3.75 3.75 0 0 1 0 5.303m-7.425 2.122a6.75 6.75 0 0 1 0-9.546m9.546 0a6.75 6.75 0 0 1 0 9.546M5.106 18.894c-3.808-3.808-3.808-9.98 0-13.789m13.788 0c3.808 3.808 3.808 9.981 0 13.789M12 12h.008v.008H12V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
-                    </svg>
-                </div>
-            }
-            actions={
-                <button
-                    onClick={() => { trackEvent('打开Instant Push配置'); setShowInstantModal(true); }}
-                    className="text-[10px] bg-indigo-100 text-indigo-600 px-3 py-1.5 rounded-full font-bold shadow-sm active:scale-95 transition-transform"
-                >
-                    配置
-                </button>
-            }
-        >
-            <p className="text-xs text-slate-500 leading-relaxed">
-                与上方 Push 加速器不同：前端发 prompt 到你自部署的 Worker，Worker 调你自己的 LLM 生成回复后分句逐条 Web Push。零数据库、零 cron。
-            </p>
-        </SettingsSection>
-
         {/* 已隐藏主动消息 2.0 板块 */}
 
         {/* 自定义网络代理 — 刻意低调的高级入口。默认折叠，不主动指引基本发现不了。
@@ -3463,63 +3216,6 @@ const Settings: React.FC = () => {
         <VersionInfo />
 
       </div>
-
-      {/* 主动消息 Push 加速 · 启用前确认 */}
-      <Modal
-          isOpen={showPpConfirm}
-          title="启用 Push 加速？"
-          onClose={() => setShowPpConfirm(false)}
-          footer={
-              <div className="flex gap-2 w-full">
-                  <button
-                      onClick={() => { trackEvent('在 Push 加速启用确认弹窗做出选择', { choice: 'cancel' }); setShowPpConfirm(false); }}
-                      className="flex-1 py-3 bg-slate-100 text-slate-600 font-bold rounded-2xl"
-                  >
-                      取消
-                  </button>
-                  <button
-                      onClick={() => {
-                          trackEvent('在 Push 加速启用确认弹窗做出选择', { choice: 'confirm' });
-                          setShowPpConfirm(false);
-                          void doEnablePushAccelerator();
-                      }}
-                      className="flex-1 py-3 bg-teal-500 text-white font-bold rounded-2xl shadow-lg shadow-teal-200"
-                  >
-                      我知道了，启用
-                  </button>
-              </div>
-          }
-      >
-          <div className="space-y-3 text-[12px] leading-relaxed text-slate-600">
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                  <p className="font-bold text-amber-800 mb-1">启用后会做三件事</p>
-                  <ol className="list-decimal pl-4 space-y-1 text-amber-900">
-                      <li>浏览器会弹 <b>"允许发送通知？"</b> 的系统对话框——请点"允许"，不然没法在后台唤醒</li>
-                      <li>浏览器生成一个 <b>推送订阅凭证</b>（只是一个"门铃地址"，不含任何聊天内容），上传到 Cloudflare</li>
-                      <li>开着本应用的标签页时，每 2 分钟给 Cloudflare 发一次心跳；关掉 5 分钟 Cloudflare 自动停止喊你</li>
-                  </ol>
-              </div>
-
-              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
-                  <p className="font-bold text-emerald-800 mb-1">谁能看到什么</p>
-                  <div className="space-y-1.5 text-emerald-900">
-                      <p><b>Cloudflare 能看到：</b>推送订阅凭证 + 角色 ID（一串随机字符串）+ 间隔分钟数。<b>看不到</b>聊天内容、角色人设、AI 回复、API Key、你是谁。</p>
-                      <p><b>浏览器厂商的推送服务（Google / Mozilla / Apple）：</b>知道你某时刻收到一条 push，内容是加密的，他们读不到。</p>
-                      <p><b>你的 AI 接口供应商：</b>和平时聊天一样，到点时浏览器在<b>本地</b>直接调你在"API 配置"里填的那个接口，走你自己的 key。Cloudflare 完全不碰这一步。</p>
-                  </div>
-              </div>
-
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                  <p className="font-bold text-slate-700 mb-1">一句话</p>
-                  <p className="text-slate-700">聊天记录和 AI 请求只在你自己和 AI 提供商之间，和现在没开 Push 加速时完全一样。Cloudflare 只是一个"到点按门铃"的闹钟。</p>
-              </div>
-
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
-                  <p className="font-bold text-blue-800 mb-1">不会主动弹通知打扰你</p>
-                  <p className="text-blue-900">浏览器后台标签 → 静默触发，进 app 就看到。浏览器整个关掉 → 下次打开 app 自动补跑，开 app 即有。中间不弹"有人想找你"那种窗口扰你。</p>
-              </div>
-          </div>
-      </Modal>
 
       {/* Cloud Config Modal */}
       <Modal isOpen={showCloudModal} title="云端备份配置" onClose={() => setShowCloudModal(false)}>
@@ -3899,9 +3595,6 @@ const Settings: React.FC = () => {
         })()}
       </Modal>
 
-      {/* API 调用记录页面 */}
-      <ApiCallLogModal isOpen={showApiCallLog} onClose={() => setShowApiCallLog(false)} />
-
       {/* Preset Name Modal */}
       <Modal isOpen={showPresetModal} title="新建预设" onClose={() => setShowPresetModal(false)} footer={<button onClick={handleSavePreset} className="w-full py-3 bg-primary text-white font-bold rounded-2xl">新建</button>}>
           <div className="space-y-2">
@@ -4091,23 +3784,6 @@ const Settings: React.FC = () => {
               </p>
           </div>
       </Modal>
-
-      <InstantPushSettingsModal
-        open={showInstantModal}
-        onClose={() => setShowInstantModal(false)}
-        onOpenVapid={() => { setShowInstantModal(false); setShowVapidModal(true); }}
-      />
-      <PushVapidSettingsModal
-        open={showVapidModal}
-        onClose={() => { setShowVapidModal(false); setVapidReadyTick((n) => n + 1); }}
-      />
-      <ActiveMsgGlobalSettingsModal
-        isOpen={showAmsg2Modal}
-        onClose={() => setShowAmsg2Modal(false)}
-        addToast={addToast}
-        realtimeConfig={realtimeConfig}
-        onOpenVapid={() => { setShowAmsg2Modal(false); setShowVapidModal(true); }}
-      />
 
     </div>
   );
